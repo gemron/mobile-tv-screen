@@ -59,6 +59,12 @@ async function main() {
     while (cache.jobs.size && Date.now() < deadline) await delay(10);
     assert.equal(cache.jobs.size, 0, 'read-ahead reaches a finite stopping point');
     assert.ok(requests.length <= 8, 'background completion never recursively downloads the movie');
+    const ensure = cache.ensure.bind(cache); let scheduled = 0;
+    cache.ensure = (...args) => { scheduled++; return ensure(...args); };
+    for (let repeat = 0; repeat < 100; repeat++) cache.plan(cache.window);
+    assert.equal(scheduled, 0, 'completed speculative blocks do not allocate promises or change their LRU position on every planning pass');
+    assert.equal(cache.stats().contiguousAheadBytes, 7 * block - 137, 'only contiguous completed bytes after the current read offset count as ready');
+    cache.ensure = ensure;
 
     const seek = await read(30 * block + 41);
     assert.deepEqual(seek.body, data.subarray(30 * block + 41, 31 * block));

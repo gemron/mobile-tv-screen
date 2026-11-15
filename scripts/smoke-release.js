@@ -89,7 +89,7 @@ async function main() {
   console.log('PASS: compiled launcher starts bundled Node, with an independent user data directory');
   execFileSync(executable, args, { env, cwd: sandbox, windowsHide: true, timeout: 10000 });
   assert.equal(child.exitCode, null, 'Duplicate launch keeps the original instance alive');
-  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/css/library.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/js/artwork.js', '/js/danmaku.js', '/js/library.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
+  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/css/library.css', '/css/subtitles.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/js/artwork.js', '/js/danmaku.js', '/js/subtitles.js', '/js/library.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
     const response = await request(file);
     assert.ok((await response.arrayBuffer()).byteLength > 0, file);
   }

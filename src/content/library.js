@@ -28,8 +28,9 @@ function waitForPlayback(promise, signal) {
 }
 
 class Library {
-  constructor({ dataDir = DATA_DIR, fetchResource = resource, adFilter, playTimeoutMs = 40000 } = {}) {
+  constructor({ dataDir = DATA_DIR, fetchResource = resource, adFilter, subtitles, playTimeoutMs = 40000 } = {}) {
     this.adFilter = adFilter;
+    this.subtitles = subtitles;
     this.playTimeoutMs = Math.max(25, Math.min(120000, Number(playTimeoutMs) || 40000));
     this.file = path.join(dataDir, 'library-config.json');
     this.sources = []; this.sourceId = ''; this.collection = new Collection(dataDir);
@@ -68,6 +69,7 @@ class Library {
   apply(document, url, importedAt = Date.now()) {
     if (!document || typeof document !== 'object' || Array.isArray(document) || !['sites', 'lives', 'live', 'urls'].some(key => Array.isArray(document[key]))) throw failure('未找到点播站点、直播列表或配置仓');
     this.config = { url, importedAt, document };
+    this.subtitles?.setSubscriptionToken(document.assrt);
     this.adFilter?.setSubscription(document);
     this.sites = (document.sites || []).filter(site => site && typeof site === 'object').slice(0, 300).map((site, index) => catalog.describeSite(site, url, index));
     const seen = new Set(); this.sites = this.sites.filter(site => { if (seen.has(site.key)) return false; seen.add(site.key); return true; });
@@ -308,6 +310,7 @@ class Library {
     if (controller.signal.aborted || generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
     this.trackProgress(castState.getSnapshot());
     const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType, resolved.playlistContext), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true,startPosition:Math.max(0,Math.min(604800,Number(resumePosition)||0)),startPositionUnit:'seconds' });
+    this.subtitles?.setSources(state.sessionId, resolved.subtitles, site.api, resolved.url, resolved.headers);
     const entry = this.collection.record({ kind: 'vod', sourceId: this.sourceId, siteKey, vodId, title: video.title, picture: video.picture, episode: episode.name, lineName: group.name, line: Number(line), index: Number(index), parserKey, quality: resolved.quality, position: state.position, duration: 0 });
     this.playback = { kind: 'vod', sourceId: this.sourceId, historyId: entry.id, siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, qualities:resolved.qualities,quality:resolved.quality,episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
     return { state, playback: this.playbackSummary() };

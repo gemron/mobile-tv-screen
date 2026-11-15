@@ -213,7 +213,8 @@ internal sealed class ReceiverContext : ApplicationContext
             if (!File.Exists(browser)) continue;
             bool isChrome = String.Equals(Path.GetFileName(browser), "chrome.exe", StringComparison.OrdinalIgnoreCase);
             string profile = Path.Combine(dataDir, isChrome ? "browser-chrome" : "browser");
-            Process.Start(new ProcessStartInfo(browser, "--app=" + url + " --window-size=1280,820 --autoplay-policy=no-user-gesture-required --no-first-run --no-default-browser-check --user-data-dir=" + Quote(profile)) { UseShellExecute = false });
+            string frameTheme = SystemInformation.HighContrast ? "" : " --force-dark-mode";
+            Process.Start(new ProcessStartInfo(browser, "--app=" + url + " --window-size=1280,820 --autoplay-policy=no-user-gesture-required --no-first-run --no-default-browser-check" + frameTheme + " --user-data-dir=" + Quote(profile)) { UseShellExecute = false });
             return;
         }
         Process.Start(url);

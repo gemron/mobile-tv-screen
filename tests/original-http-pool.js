@@ -11,6 +11,8 @@ const bytes = Buffer.from(Array.from({ length: 256 * 1024 }, (_, i) => i % 251))
 const server = http2.createServer({ settings: { maxConcurrentStreams: 100 } });
 const connections = new Set(), requests = [], sessions = [];
 let active = 0, maxActive = 0, refused = false, sentGoaway = false;
+let releaseWide;
+const wideGate = new Promise(resolve => { releaseWide = resolve; });
 server.on('session', session => { sessions.push(session); connections.add(session); session.on('error', () => {}); session.on('close', () => connections.delete(session)); });
 server.on('stream', async (stream, headers) => {
   stream.on('error', () => {});
@@ -22,7 +24,8 @@ server.on('stream', async (stream, headers) => {
   stream.once('close', () => active--);
   const range = /^bytes=(\d+)-(\d+)$/.exec(headers.range || '');
   const start = range ? Number(range[1]) : 0, end = range ? Number(range[2]) : bytes.length - 1;
-  await delay(headers[':path'].startsWith('/slow') ? 150 : 10);
+  if (headers[':path'].startsWith('/wide')) await wideGate;
+  else await delay(headers[':path'].startsWith('/slow') ? 150 : 10);
   if (stream.destroyed) return;
   stream.respond({ ':status': 206, 'content-type': 'video/x-matroska', 'content-range': `bytes ${start}-${end}/${bytes.length}`, 'content-length': end - start + 1 });
   stream.end(bytes.subarray(start, end + 1));
@@ -51,6 +54,25 @@ async function main() {
     for (const request of requests) assert.equal(request.cookie, (Number(/^bytes=(\d+)/.exec(request.range)[1]) / 1024) % 2 ? 'account-a' : 'account-b', 'credentials stay on their own stream');
     assert.ok(requests.every(request => request.path.endsWith('?signed=fixture')));
   } finally { pool.close(); }
+
+  const wide = new OriginalHttpPool({ fallback, connect, connectionsPerOrigin: 4, streamsPerConnection: 4 });
+  try {
+    const before = sessions.length;
+    const reads = Array.from({ length: 16 }, (_, i) => wide.open(target.replace('/original', '/wide'), { range: `bytes=${i * 1024}-${i * 1024 + 1023}`, cookie: 'wide-' + i }).then(body));
+    const deadline = Date.now() + 3000;
+    while (wide.stats().activeStreams < 16 && Date.now() < deadline) await delay(5);
+    assert.equal(wide.stats().connections, 4, 'high-resolution reads expand to a bounded four-connection pool');
+    assert.equal(wide.stats().activeStreams, 16);
+    assert.ok(sessions.slice(before).every(session => session.state.localWindowSize > 0));
+    releaseWide();
+    const received = await Promise.all(reads);
+    received.forEach((chunk, i) => assert.deepEqual(chunk, bytes.subarray(i * 1024, i * 1024 + 1024)));
+    await delay(10);
+    assert.equal(wide.stats().activeStreams, 0);
+    assert.deepEqual(await body(await wide.open(target, { range: 'bytes=0-1023' })), bytes.subarray(0,1024));
+    assert.equal(wide.stats().connections, 4, 'completed sessions are reused without opening additional connections');
+    assert.equal(wide.stats().fallbackRequests, 0);
+  } finally { releaseWide(); wide.close(); }
 
   const shared = new OriginalHttpPool({ fallback, connect });
   try {

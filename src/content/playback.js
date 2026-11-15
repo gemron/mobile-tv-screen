@@ -54,6 +54,7 @@ function sameOrigin(a, b) { try { return new URL(a).origin === new URL(b).origin
 async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag = '', signal, quality } = {}) {
   let result = raw && typeof raw === 'object' ? raw : {};
   if (result.url == null && result.data && typeof result.data === 'object') result = { ...result, ...result.data };
+  let subtitles = result.subs || result.subtitles || [];
   if (result.drm) throw new Error('该资源声明了 DRM，当前播放器尚未支持这种授权播放方式');
   if (result.playlistContext) {
     if (result.playlistContext.kind !== 'hmys') throw new Error('该线路的清单格式尚未支持');
@@ -97,6 +98,7 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
       let parsed; try { parsed = json(response.text); } catch { throw new Error('JSON 解析器返回了网页或无效数据，请选择网页解析器或更换接口'); }
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('JSON 解析器返回的播放信息格式无效');
       if (parsed?.url == null && parsed?.data && typeof parsed.data === 'object') parsed = { ...parsed, ...parsed.data };
+      if (Array.isArray(parsed.subs || parsed.subtitles)) subtitles = parsed.subs || parsed.subtitles;
       if (parsed?.url == null && typeof parsed?.data?.playUrl === 'string') parsed = { ...parsed, url: parsed.data.playUrl };
       const returned = variants(parsed?.url);
       if (!returned.values.length) throw new Error(parsed?.msg || parsed?.message || '解析器没有返回可播放地址');
@@ -124,6 +126,6 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
   if (!mime && !/\.(mp4|webm|m4v|mp3|m4a|aac|wav|ogg)(?:[?#]|$)/i.test(url)) mime = await sniffType(url, headers, signal);
   if (mime === 'application/dash+xml') throw new Error('该线路返回 DASH 清单；当前支持分离音视频地址转封装，请选择 HLS 或 MP4 线路');
   if(requested!=null&&choices.values.length===1&&requested!==0)throw Object.assign(new Error('该资源只返回了一个画质'),{status:400});
-  return { url, headers, mimeType: mime, audioUrl: result.audioUrl ? webUrl(result.audioUrl, site.api) : '', isLive: Boolean(result.isLive), qualities: choices.values.map(v => v.name), quality: selected, ...(result.playlistContext ? { playlistContext: result.playlistContext } : {}) };
+  return { url, headers, mimeType: mime, audioUrl: result.audioUrl ? webUrl(result.audioUrl, site.api) : '', isLive: Boolean(result.isLive), subtitles, qualities: choices.values.map(v => v.name), quality: selected, ...(result.playlistContext ? { playlistContext: result.playlistContext } : {}) };
 }
 module.exports = { resolvePlayback, variants, mimeType, parserAddress, requestHeaders, sniffType };

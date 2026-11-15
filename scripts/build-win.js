@@ -23,27 +23,10 @@ const hash = file => new Promise((resolve, reject) => {
 });
 
 function createIcon(file) {
-  const size = 64, pixels = Buffer.alloc(size * size * 4);
-  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
-    const i = ((size - 1 - y) * size + x) * 4;
-    const dx = Math.max(7 - x, 0, x - 56), dy = Math.max(7 - y, 0, y - 56);
-    if (dx * dx + dy * dy > 49) continue;
-    let color = [16, 126, 100];
-    const frame = x >= 12 && x <= 51 && y >= 16 && y <= 43 && (x <= 15 || x >= 48 || y <= 19 || y >= 40);
-    const stand = y >= 44 && y <= 48 && x >= 29 && x <= 34 || y >= 49 && y <= 51 && x >= 24 && x <= 39;
-    const arrow = y >= 25 && y <= 34 && x >= 27 && x <= 36 && Math.abs(y - 29.5) <= (36 - x) * 0.65;
-    if (frame || stand || arrow) color = [255, 255, 255];
-    pixels[i] = color[2]; pixels[i + 1] = color[1]; pixels[i + 2] = color[0]; pixels[i + 3] = 255;
-  }
-  const mask = Buffer.alloc(Math.ceil(size / 32) * 4 * size);
-  const bmp = Buffer.alloc(40);
-  bmp.writeUInt32LE(40, 0); bmp.writeInt32LE(size, 4); bmp.writeInt32LE(size * 2, 8);
-  bmp.writeUInt16LE(1, 12); bmp.writeUInt16LE(32, 14); bmp.writeUInt32LE(pixels.length, 20);
-  const header = Buffer.alloc(22);
-  header.writeUInt16LE(1, 2); header.writeUInt16LE(1, 4); header[6] = size; header[7] = size;
-  header.writeUInt16LE(1, 10); header.writeUInt16LE(32, 12);
-  header.writeUInt32LE(bmp.length + pixels.length + mask.length, 14); header.writeUInt32LE(22, 18);
-  fs.writeFileSync(file, Buffer.concat([header, bmp, pixels, mask]));
+  const compiler = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+  const renderer = path.join(path.dirname(file), 'IconRenderer.exe');
+  run(compiler, ['/nologo', '/target:exe', '/reference:System.Drawing.dll', '/out:' + renderer, path.join(root, 'packaging', 'IconRenderer.cs')]);
+  run(renderer, [file, path.join(path.dirname(file), 'MobileTV-icon.png')]);
 }
 
 async function main() {
@@ -105,7 +88,9 @@ async function main() {
     '第三方组件及历史 MIT 代码遵循各自许可证，详见 LICENSE 和 THIRD_PARTY_NOTICES.md。', '',
     '本版新增：多订阅切换、播放历史与收藏、电视式直播频道表、B站专用投屏（实验）。',
     '修复换集状态与厂长媒体解析；解析有加载、取消、超时及重试入口。',
-    '夸克原文件按实际分辨率使用 32–256 MiB 有界缓冲，优化高分辨率播放及拖动音画同步。',
+    '夸克原文件按实际分辨率使用 32–512 MiB 有界缓冲，兼容封装另有 64 MiB 成品预读。',
+    '新增字幕搜索与选择、本地字幕及链接，支持延迟和字号调整；S 键打开。',
+    '应用图标与标题栏更新，保留原生窗口操作。',
     '缓存自动回收，视频码流不重编码；实际流畅度取决于源站、网络与设备。', '',
     '使用方法',
     '1. 将整个 ZIP 解压到一个文件夹，双击 MobileTV.exe。请勿只复制 EXE。',

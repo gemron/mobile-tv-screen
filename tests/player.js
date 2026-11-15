@@ -183,6 +183,11 @@ assert.equal(resolutionTelemetry.videoWidth, 3840); assert.equal(resolutionTelem
 fpsPlayer.progress({ sessionId: 1, originalBuffer: { active: true, profile: '4K', bytes: 20 * 1048576, maxBytes: 256 * 1048576, targetSeconds: 180 } });
 assert.match(fpsPlayer.elements.get('metricBuffer').textContent, /4K.*20 \/ 256 MB/);
 assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, false);
+fpsPlayer.progress({sessionId:1,originalBuffer:{active:true,profile:'4K',bytes:20*1048576,maxBytes:512*1048576,contiguousAheadBytes:12*1048576,estimatedAheadSeconds:8,targetSeconds:180},remuxBuffer:{active:true,bytes:16*1048576,maxBytes:64*1048576}});
+assert.match(fpsPlayer.elements.get('metricRemux').textContent,/16.0 \/ 64 MB/);
+assert.match(fpsPlayer.elements.get('metricBuffer').title,/连续缓存 12.0 MB.*约 8 秒/);
+fpsPlayer.progress({sessionId:0,remuxBuffer:{active:false}});
+assert.equal(fpsPlayer.elements.get('metricRemux').hidden,false,'stale telemetry cannot hide the active remux reserve');
 fpsPlayer.progress({ sessionId: 2, originalBuffer: { active: false } });
 assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, false, 'stale buffer telemetry cannot hide the active session');
 fpsPlayer.cast('', 'auto', 'video', { status: 'IDLE' });

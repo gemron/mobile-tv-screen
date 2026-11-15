@@ -2,8 +2,8 @@ const { createHash } = require('crypto');
 const { Readable } = require('stream');
 const MIB = 1024 * 1024;
 const BUFFER_PROFILES = [
-  { edge: 3200, label: '4K', max: 256, minAhead: 64, maxAhead: 192, seconds: 180 },
-  { edge: 2304, label: '2K', max: 192, minAhead: 48, maxAhead: 144, seconds: 150 },
+  { edge: 3200, label: '4K', max: 512, minAhead: 96, maxAhead: 384, seconds: 180 },
+  { edge: 2304, label: '2K', max: 256, minAhead: 64, maxAhead: 192, seconds: 150 },
   { edge: 1600, label: '1080p', max: 128, minAhead: 32, maxAhead: 96, seconds: 120 },
   { edge: 1100, label: '720p', max: 64, minAhead: 16, maxAhead: 48, seconds: 90 },
   { edge: 0, label: '标清', max: 32, minAhead: 8, maxAhead: 22.5, seconds: 60 },
@@ -29,7 +29,7 @@ class OriginalRangeCache {
     this.maxBytes = maxBytes;
     this.concurrency = concurrency;
     this.ahead = Math.min(ahead, Math.max(0, Math.floor(maxBytes / blockBytes) - concurrency));
-    this.base = { maxBytes, ahead: this.ahead };
+    this.base = { maxBytes, ahead: this.ahead, concurrency };
     this.adaptive = adaptive;
     this.videoInfo = null;
     this.profile = '默认';
@@ -78,9 +78,10 @@ class OriginalRangeCache {
     // untrusted metadata and without allocating the maximum up front.
     const desired = Math.max(profile.minAhead * MIB, Math.min(profile.maxAhead * MIB, rate ? rate * profile.seconds * 1.25 : profile.minAhead * MIB));
     const maxBytes = profile.max * MIB;
-    const ahead = Math.min(Math.ceil(desired / this.blockBytes), Math.max(0, Math.floor(maxBytes / this.blockBytes) - this.concurrency));
+    const concurrency = Math.max(this.base.concurrency, profile.edge >= 3200 ? 384 : profile.edge >= 2304 ? 192 : 96);
+    const ahead = Math.min(Math.ceil(desired / this.blockBytes), Math.max(0, Math.floor(maxBytes / this.blockBytes) - concurrency));
     if (this.maxBytes === maxBytes && this.ahead === ahead && this.profile === profile.label) return;
-    this.maxBytes = maxBytes; this.ahead = ahead; this.profile = profile.label; this.targetSeconds = profile.seconds;
+    this.maxBytes = maxBytes; this.ahead = ahead; this.concurrency = concurrency; this.profile = profile.label; this.targetSeconds = profile.seconds;
     while (this.bytes > this.maxBytes && this.entries.size) {
       const key = this.entries.keys().next().value;
       this.bytes -= this.entries.get(key).body.length; this.entries.delete(key);
@@ -130,10 +131,18 @@ class OriginalRangeCache {
     if (this.closed || this.window !== source || this.sources.get(source.key) !== source || !source.total) return;
     this.cancelAhead(source, source.anchor);
     const last = Math.min(source.anchor + this.ahead, Math.ceil(source.total / this.blockBytes) - 1);
-    for (let index = source.anchor + 1; index <= last; index++) this.ensure(source, index, false).catch(() => {});
+    for (let index = source.anchor + 1; index <= last; index++) {
+      const key = source.key + ':' + index;
+      // Planning is frequent while a 4K window fills. Do not attach another
+      // promise handler to every existing job, or refresh speculative LRU hits.
+      if (this.entries.has(key) || this.jobs.has(key) && !this.jobs.get(key).cancelled) continue;
+      if (this.jobs.size >= this.ahead + this.concurrency + 8) break;
+      this.ensure(source, index, false, true);
+    }
+    this.pump();
   }
 
-  ensure(source, index, demand) {
+  ensure(source, index, demand, deferPump = false) {
     const key = source.key + ':' + index;
     const entry = this.entries.get(key);
     if (entry) {
@@ -157,7 +166,7 @@ class OriginalRangeCache {
     job.promise.catch(() => {}); job.header.catch(() => {});
     this.jobs.set(key, job);
     this.misses++;
-    this.pump();
+    if (!deferPump) this.pump();
     return job.promise;
   }
 
@@ -168,11 +177,16 @@ class OriginalRangeCache {
       const speculative = [...this.jobs.values()].reverse().find(job => job.running && !job.demand && !job.cancelled && (job.received || 0) < (job.expected ?? Infinity));
       if (speculative) this.cancel(speculative);
     }
-    while (this.running < this.concurrency) {
-      const queued = [...this.jobs.values()].filter(job => !job.running && !job.cancelled);
-      const job = queued.find(job => job.demand) || queued.find(candidate => candidate.source.anchor >= candidate.source.urgentUntil || [...this.jobs.values()].filter(other => other.running && other.source === candidate.source).length < 3);
-      if (!job) return;
+    const queued = [...this.jobs.values()].filter(job => !job.running && !job.cancelled);
+    const ordered = [...queued.filter(job => job.demand), ...queued.filter(job => !job.demand)];
+    const runningBySource = new Map();
+    for (const job of this.jobs.values()) if (job.running) runningBySource.set(job.source, (runningBySource.get(job.source) || 0) + 1);
+    for (const job of ordered) {
+      if (this.running >= this.concurrency) break;
+      if (job.cancelled || job.running) continue;
+      if (!job.demand && job.source.anchor < job.source.urgentUntil && (runningBySource.get(job.source) || 0) >= 3) continue;
       job.running = true; job.started = Date.now(); this.running++;
+      runningBySource.set(job.source, (runningBySource.get(job.source) || 0) + 1);
       this.fetch(job).then(entry => { job.finish(); job.resolve(entry); }, error => {
         if (!job.cancelled) this.failures++;
         job.finish(error); job.reject(error);
@@ -243,7 +257,7 @@ class OriginalRangeCache {
     // After a distant seek, feed the current position before allowing a
     // large speculative window to compete for bandwidth.
     if (index > source.anchor + this.ahead || index < source.anchor - 1) source.urgentUntil = index + 3;
-    source.anchor = index;
+    source.anchor = index; source.position = start;
     this.cancelAhead(source, index);
     if (source.total && start >= source.total) return { status: 416, headers: { 'Content-Range': `bytes */${source.total}` }, body: Buffer.alloc(0) };
     const pending = this.ensure(source, index, true);
@@ -330,14 +344,22 @@ class OriginalRangeCache {
   }
 
   stats() {
-    return { active: Boolean(this.window || this.videoInfo), profile: this.profile, targetSeconds: this.targetSeconds, bytes: this.bytes, maxBytes: this.maxBytes, blockBytes: this.blockBytes, parallelLimit: this.concurrency, aheadBytes: this.ahead * this.blockBytes, entries: this.entries.size, filling: this.running, queued: [...this.jobs.values()].filter(job => !job.running).length, hits: this.hits, misses: this.misses, coalesced: this.coalesced, downloadedBytes: this.downloadedBytes, receivedBytes: this.receivedBytes, failures: this.failures };
+    let contiguousAheadBytes = 0;
+    const source = this.window;
+    if (source?.total) for (let index = source.anchor; index * this.blockBytes < source.total; index++) {
+      const entry = this.entries.get(source.key + ':' + index);
+      if (!entry) break;
+      contiguousAheadBytes += Math.max(0, entry.body.length - (index === source.anchor ? (source.position || 0) % this.blockBytes : 0));
+    }
+    const rate = source?.total && this.videoInfo?.duration ? source.total / this.videoInfo.duration : 0;
+    return { active: Boolean(this.window || this.videoInfo), profile: this.profile, targetSeconds: this.targetSeconds, bytes: this.bytes, maxBytes: this.maxBytes, blockBytes: this.blockBytes, parallelLimit: this.concurrency, aheadBytes: this.ahead * this.blockBytes, contiguousAheadBytes, estimatedAheadSeconds: rate ? contiguousAheadBytes / rate : 0, entries: this.entries.size, filling: this.running, queued: [...this.jobs.values()].filter(job => !job.running).length, hits: this.hits, misses: this.misses, coalesced: this.coalesced, downloadedBytes: this.downloadedBytes, receivedBytes: this.receivedBytes, failures: this.failures };
   }
 
   clear() {
     for (const job of [...this.jobs.values()]) this.cancel(job);
     this.entries.clear(); this.sources.clear(); this.window = null; this.bytes = 0;
     this.videoInfo = null; this.profile = '默认'; this.targetSeconds = 0;
-    this.maxBytes = this.base.maxBytes; this.ahead = this.base.ahead;
+    this.maxBytes = this.base.maxBytes; this.ahead = this.base.ahead; this.concurrency = this.base.concurrency;
   }
 
   close() { this.closed = true; this.clear(); }

@@ -30,14 +30,27 @@
     toastTimer = setTimeout(() => {element.classList.remove('show');if(typeof element.hidePopover==='function'&&element.matches(':popover-open'))element.hidePopover();}, 2600);
   }
   document.addEventListener('close',event=>{const element=$('toast');if(event.target.tagName==='DIALOG'&&element?.classList.contains('show'))placeToast(element);},true);
-  window.MobileTVUI = { toast };
+  let titleSection = '投屏', titleMedia = '';
+  function updateTitle({ section, media } = {}) {
+    if (section !== undefined) titleSection = section;
+    if (media !== undefined) titleMedia = String(media || '').trim();
+    document.title = [...(titleMedia || titleSection)].slice(0, 90).join('') + ' · MobileTV';
+    syncFrameColor();
+  }
+  function syncFrameColor() {
+    const dark = document.documentElement.dataset.theme === 'dark' || document.body.classList.contains('casting-active');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#14221f' : '#eef5f2');
+  }
+  window.MobileTVUI = { toast, updateTitle };
 
   try {
     document.documentElement.dataset.theme = localStorage.getItem('mobiletv-theme') === 'dark' ? 'dark' : 'light';
   } catch {}
+  syncFrameColor();
   bind('btnTheme', () => {
     const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     document.documentElement.dataset.theme = theme;
+    syncFrameColor();
     try { localStorage.setItem('mobiletv-theme', theme); } catch {}
   });
 

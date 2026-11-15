@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#f6f7f9" />
+  <meta name="theme-color" content="#eef5f2" />
   <title>手机遥控 · MobileTV</title>
   <link rel="icon" href="/favicon.svg" />
   <link rel="stylesheet" href="/css/style.css" />
   <link rel="stylesheet" href="/css/mobile.css" />
 </head>
 <body class="mobile-page">
-  <header class="mobile-header"><div class="brand"><span class="brand-icon"><svg class="icon"><use href="/icons.svg#cast" /></svg></span><div><span class="mini-label">手机遥控</span><h1 id="tvName">MobileTV</h1></div></div><button class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换浅色或深色主题"><svg class="icon theme-moon"><use href="/icons.svg#moon" /></svg><svg class="icon theme-sun"><use href="/icons.svg#sun" /></svg></button></header>
+  <header class="mobile-header"><div class="brand"><img class="brand-icon brand-logo" src="/favicon.svg" alt="" width="42" height="42" /><div><span class="mini-label">手机遥控</span><h1 id="tvName">MobileTV</h1></div></div><button class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换浅色或深色主题"><svg class="icon theme-moon"><use href="/icons.svg#moon" /></svg><svg class="icon theme-sun"><use href="/icons.svg#sun" /></svg></button></header>
   <div class="mobile-connection"><span class="ws-pill" id="wsBadge" role="status">正在连接大屏</span><span>同一 Wi-Fi · 本地连接</span></div>
   <nav class="tabs" role="tablist" aria-label="投屏功能">
     <button class="tab-btn active" id="nav-remote" role="tab" aria-selected="true" aria-controls="tab-remote" data-tab="remote"><svg class="icon"><use href="/icons.svg#settings" /></svg>遥控</button>

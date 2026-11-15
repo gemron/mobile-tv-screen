@@ -13,13 +13,15 @@ async function waitReady(promise, signal) {
 // Quark original files support multiplexed ranges. Keep credentials on each
 // request, reuse the TLS connection, and retire it before the CDN's request cap.
 class OriginalHttpPool {
-  constructor({ fallback, connect = http2.connect, maxRequests = 900, idleMs = 30000, timeoutMs = 15000 } = {}) {
+  constructor({ fallback, connect = http2.connect, maxRequests = 900, idleMs = 30000, timeoutMs = 15000, connectionsPerOrigin = 1, streamsPerConnection = 96 } = {}) {
     if (typeof fallback !== 'function') throw new TypeError('An HTTP/1 fallback is required');
     this.fallback = fallback;
     this.connect = connect;
     this.maxRequests = maxRequests;
     this.idleMs = idleMs;
     this.timeoutMs = timeoutMs;
+    this.connectionsPerOrigin = Math.max(1, Math.min(4, Math.floor(connectionsPerOrigin) || 1));
+    this.streamsPerConnection = Math.max(1, Math.min(128, Math.floor(streamsPerConnection) || 96));
     this.origins = new Map();
     this.sessions = new Set();
     this.blocked = new Map();
@@ -30,14 +32,18 @@ class OriginalHttpPool {
   retire(entry) {
     if (!entry || entry.draining) return;
     entry.draining = true;
-    if (this.origins.get(entry.origin) === entry) this.origins.delete(entry.origin);
+    const entries = this.origins.get(entry.origin);
+    if (entries) {
+      const remaining = entries.filter(item => item !== entry);
+      if (remaining.length) this.origins.set(entry.origin, remaining); else this.origins.delete(entry.origin);
+    }
     if (!entry.active && !entry.session.destroyed) entry.session.close();
   }
 
   create(origin) {
     const session = this.connect(origin, { settings: { initialWindowSize: 1024 * 1024 } });
-    const entry = { origin, session, requests: 0, active: 0, draining: false };
-    this.origins.set(origin, entry);
+    const entry = { origin, session, requests: 0, active: 0, waiting: 0, draining: false };
+    this.origins.set(origin, [...(this.origins.get(origin) || []), entry]);
     this.sessions.add(entry);
     entry.ready = new Promise((resolve, reject) => {
       const timer = setTimeout(() => session.destroy(Object.assign(new Error('Original transport timeout'), { code: 'ETIMEDOUT' })), this.timeoutMs);
@@ -46,11 +52,11 @@ class OriginalHttpPool {
       session.once('close', () => { clearTimeout(timer); reject(new Error('Original transport closed before connection')); });
     });
     entry.ready.catch(() => {});
-    session.on('error', () => { if (this.origins.get(origin) === entry) this.origins.delete(origin); });
+    session.on('error', () => this.retire(entry));
     session.on('goaway', () => this.retire(entry));
-    session.on('close', () => { this.sessions.delete(entry); if (this.origins.get(origin) === entry) this.origins.delete(origin); });
+    session.on('close', () => { this.sessions.delete(entry); this.retire(entry); });
     session.setTimeout(this.idleMs, () => this.retire(entry));
-    while (this.origins.size > 4) this.retire(this.origins.values().next().value);
+    while (this.origins.size > 4) for (const old of this.origins.values().next().value) this.retire(old);
     return entry;
   }
 
@@ -58,8 +64,16 @@ class OriginalHttpPool {
     for (;;) {
       signal?.throwIfAborted();
       if (this.closed) throw Object.assign(new Error('Original transport closed'), { name: 'AbortError' });
-      const entry = this.origins.get(origin) || this.create(origin);
-      await waitReady(entry.ready, signal);
+      let entries = this.origins.get(origin) || [];
+      for (const entry of entries) if (entry.draining || entry.session.closed || entry.session.destroyed || entry.requests >= this.maxRequests) { if (!entry.draining) this.rotations++; this.retire(entry); }
+      entries = this.origins.get(origin) || [];
+      // Fill one connection before opening another: spreading 96 requests
+      // thinly across four connections was slower on the actual CDN.
+      let entry = entries.find(item => item.active + item.waiting < this.streamsPerConnection);
+      if (!entry && entries.length < this.connectionsPerOrigin) entry = this.create(origin);
+      entry ||= entries.reduce((best, item) => !best || item.active + item.waiting < best.active + best.waiting ? item : best, null);
+      entry.waiting++;
+      try { await waitReady(entry.ready, signal); } finally { entry.waiting--; }
       signal?.throwIfAborted();
       if (entry.draining || entry.session.closed || entry.session.destroyed || entry.requests >= this.maxRequests) {
         if (!entry.draining) this.rotations++;
@@ -134,7 +148,7 @@ class OriginalHttpPool {
   }
 
   stats() {
-    return { connections: this.sessions.size, activeStreams: [...this.sessions].reduce((sum, entry) => sum + entry.active, 0), h2Requests: this.h2Requests, fallbackRequests: this.fallbackRequests, rotations: this.rotations, retries: this.retries, errors: this.errors };
+    return { connections: this.sessions.size, connectionsPerOrigin: this.connectionsPerOrigin, activeStreams: [...this.sessions].reduce((sum, entry) => sum + entry.active, 0), h2Requests: this.h2Requests, fallbackRequests: this.fallbackRequests, rotations: this.rotations, retries: this.retries, errors: this.errors };
   }
 
   close() {

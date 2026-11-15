@@ -92,7 +92,7 @@ async function main() {
   await control({ action: 'cast', url: base + '/api/sample-video.mp4', streamMode: 'transcode' });
   await waitFor('tvVideo.currentSrc.includes("/api/transcode?") && tvVideo.readyState>=3 && tvVideo.currentTime>0.3 && !tvVideo.paused');
   await control({ action: 'seek', position: 4 });
-  await waitFor('tvVideo.currentSrc.includes("&start=4") && tvVideo.currentTime>0.5 && !tvVideo.paused');
+  await waitFor('tvVideo.currentTime + Number(new URL(tvVideo.currentSrc).searchParams.get("start") || 0) > 4.5 && !tvVideo.paused');
   const status = await (await fetch(base + '/api/status')).json();
   assert.ok(status.state.position >= 4, 'Server telemetry keeps the absolute remux playhead');
   console.log('PASS: real Edge HLS buffers through an 8-second origin outage; remux playback and seeking work');

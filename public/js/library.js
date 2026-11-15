@@ -22,6 +22,7 @@
   function setMode(mode) {
     if (state.mode !== mode) begin();
     state.mode = mode;
+    window.MobileTVUI?.updateTitle?.({ section: ({ cast: '投屏', vod: '影视片库', live: '直播电视' })[mode] || 'MobileTV' });
     $('standbyView').hidden = mode !== 'cast'; $('libraryView').hidden = mode === 'cast';
     $('libraryVod').hidden = mode !== 'vod'; $('libraryLive').hidden = mode !== 'live';
     for (const button of document.querySelectorAll('[data-library-nav]')) { const active = button.dataset.libraryNav === mode; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }

@@ -180,7 +180,9 @@ async function createAppServer(options = {}) {
 
   // JSON parser scoped to API routes (after AirPlay raw parsers)
   app.use('/api', express.json({ limit: '2mb' }));
-  const libraryRouter = createLibraryRouter({ dataDir: options.dataDir || DATA_DIR, adFilter: proxyRouter.adFilter });
+  const subtitles = new (require('./services/subtitles').Subtitles)({ dataDir: options.dataDir || DATA_DIR, ...(options.subtitlesRequest ? { request: options.subtitlesRequest } : {}), ...(options.subtitlesApiBase ? { apiBase: options.subtitlesApiBase } : {}) });
+  app.use('/api/subtitles', require('./services/subtitleRouter').createSubtitleRouter(subtitles));
+  const libraryRouter = createLibraryRouter({ dataDir: options.dataDir || DATA_DIR, adFilter: proxyRouter.adFilter, subtitles });
   app.use('/api/library', libraryRouter);
   const biliConfigFile=path.join(options.dataDir||DATA_DIR,'bilibili-cast.json');let savedBili={};try{savedBili=JSON.parse(fs.readFileSync(biliConfigFile,'utf8'));}catch{}
   let enableBilibili=options.enableBilibiliCast??(process.env.ENABLE_BILIBILI_CAST==='1'||savedBili.enabled===true);
@@ -229,6 +231,7 @@ async function createAppServer(options = {}) {
       history: castState.getHistory(),
       mediaCache: proxyRouter.mediaCache.stats(),
       originalCache: proxyRouter.originalCache.stats(),
+      remuxBuffer: proxyRouter.remuxBufferStats(),
     };
   }
 
@@ -434,12 +437,13 @@ async function createAppServer(options = {}) {
 
   // Forward CastStateService events to WebSocket clients
   const onStateChange = (snap) => {
+    subtitles.reset(['IDLE', 'STOPPED'].includes(snap.status) ? null : snap.sessionId);
     proxyRouter.originalCache.setMedia(snap.url, snap.status);
     broadcastWs({ type: 'state', data: snap });
   };
   const onProgress = (prog) => {
     const buffer = proxyRouter.originalCache.stats();
-    broadcastWs({ type: 'progress', data: { ...prog, originalBuffer: buffer.active ? { active: true, profile: buffer.profile, bytes: buffer.bytes, maxBytes: buffer.maxBytes, aheadBytes: buffer.aheadBytes, targetSeconds: buffer.targetSeconds } : { active: false } } });
+    broadcastWs({ type: 'progress', data: { ...prog, originalBuffer: buffer.active ? { active: true, profile: buffer.profile, bytes: buffer.bytes, maxBytes: buffer.maxBytes, aheadBytes: buffer.aheadBytes, targetSeconds: buffer.targetSeconds, contiguousAheadBytes: buffer.contiguousAheadBytes, estimatedAheadSeconds: buffer.estimatedAheadSeconds } : { active: false }, remuxBuffer: proxyRouter.remuxBufferStats() } });
   };
   const onCommand = (cmd) => broadcastWs({ type: 'command', data: cmd }, 'tv');
   const onLog = (entry) => broadcastWs({ type: 'log', data: entry });

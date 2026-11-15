@@ -9,6 +9,7 @@ const castState = require('./castState');
 const { SegmentCache } = require('./segmentCache');
 const { OriginalRangeCache } = require('./originalRangeCache');
 const { OriginalHttpPool } = require('./originalHttpPool');
+const { RemuxBuffer } = require('./remuxBuffer');
 const mediaHeaders = require('./mediaHeaders');
 const { HlsAdFilter } = require('./hlsAdFilter');
 
@@ -206,7 +207,7 @@ function createProxyRouter(options = {}) {
   const router = express.Router();
   const cache = new SegmentCache(options.cache);
   router.mediaCache = cache;
-  const originalPool = options.originalCache?.open ? null : new OriginalHttpPool({ fallback: openUpstreamStream });
+  const originalPool = options.originalCache?.open ? null : new OriginalHttpPool({ fallback: openUpstreamStream, connectionsPerOrigin: 4 });
   const originalCache = new OriginalRangeCache({ open: originalPool ? originalPool.open.bind(originalPool) : openUpstreamStream, adaptive: true, ...options.originalCache });
   if (originalPool) {
     const close = originalCache.close.bind(originalCache), stats = originalCache.stats.bind(originalCache);
@@ -214,6 +215,11 @@ function createProxyRouter(options = {}) {
     originalCache.stats = () => ({ ...stats(), transport: originalPool.stats() });
   }
   router.originalCache = originalCache;
+  const remuxBuffers = new Set();
+  router.remuxBufferStats = (sessionId = castState.getSnapshot().sessionId) => {
+    const active = [...remuxBuffers].filter(item => item.sessionId === sessionId && !item.buffer.destroyed);
+    return { active: active.length > 0, streams: active.length, bytes: active.reduce((sum, item) => sum + item.buffer.stats().bytes, 0), maxBytes: active.reduce((sum, item) => sum + item.buffer.maxBytes, 0) };
+  };
   const adFilter = options.adFilter || new HlsAdFilter({dataDir:options.dataDir});
   router.adFilter = adFilter;
   router.get('/adfilter', (req,res) => res.json(adFilter.summary()));
@@ -464,9 +470,14 @@ function createProxyRouter(options = {}) {
     // A copied video keeps its keyframe preroll while encoded audio is trimmed
     // to the requested seek time. Wait for initial packets before writing the
     // edit lists, so fragmented MP4 preserves their shared presentation clock.
-    args.push('-movflags', 'frag_keyframe+empty_moov+delay_moov+default_base_moof', '-f', 'mp4', 'pipe:1');
+    // Bound fragment latency even for sources with very long keyframe gaps.
+    // Keep delay_moov and the original timestamps/edit lists for seek A/V sync.
+    args.push('-movflags', 'frag_keyframe+empty_moov+delay_moov+default_base_moof', '-frag_duration', '1000000', '-flush_packets', '1', '-f', 'mp4', 'pipe:1');
 
     const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const snapshot = castState.getSnapshot(), reserve = new RemuxBuffer({ live: Boolean(snapshot.metadata?.isLive) });
+    const buffered = { sessionId: snapshot.sessionId, buffer: reserve }; remuxBuffers.add(buffered);
+    reserve.once('close', () => remuxBuffers.delete(buffered));
     let closed = false;
 
     const killFfmpeg = () => {
@@ -505,7 +516,7 @@ function createProxyRouter(options = {}) {
       }
     });
 
-    pipeline(ff.stdout, res, err => {
+    pipeline(ff.stdout, reserve, res, err => {
       if (err) killFfmpeg();
     });
   });

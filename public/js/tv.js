@@ -46,6 +46,7 @@
     hudSubtitle: $('hudSubtitle'),
     metricPerf: $('metricPerf'),
     metricBuffer: $('metricBuffer'),
+    metricRemux: $('metricRemux'),
     metricProto: $('metricProto'),
     videoResolution: $('videoResolution'),
     btnStopCast: $('btnStopCast'),
@@ -248,6 +249,7 @@
   function destroyMediaEngines() {
     els.seekBuffered.style.background = 'none'; els.seekPlayed.style.width = '0%';
     if (els.metricBuffer) els.metricBuffer.hidden = true;
+    if (els.metricRemux) els.metricRemux.hidden = true;
     if (originalBufferTimer !== null) clearTimeout(originalBufferTimer);
     originalBufferTimer = null;
     originalBufferReady = false;
@@ -332,6 +334,7 @@
     destroyMediaEngines();
     if(isServerRemux(rawUrl)){mode='transcode';activeStreamMode='transcode';}
     transcodeBase = mode === 'transcode' ? Math.max(0, resumePosition) : 0;
+    window.MobileTVSubtitles?.setTimeline(transcodeBase);
     let resolvedUrl = resolvePlaybackUrl(rawUrl, mode);
     if (transcodeBase > 0) {const value=new URL(resolvedUrl,location.href);value.searchParams.set('start',String(transcodeBase));resolvedUrl=value.pathname+value.search;}
     const cleanPath = rawUrl.split('?')[0].toLowerCase();
@@ -472,7 +475,9 @@
     updateProtocolBadges(snap.protocols);
 
     const isActive = snap.status && snap.status !== 'IDLE' && snap.status !== 'STOPPED';
+    window.MobileTVSubtitles?.setState(snap);
     document.body.classList.toggle('casting-active', Boolean(isActive));
+    window.MobileTVUI?.updateTitle?.({ media: isActive ? snap.metadata?.title || '正在播放' : '' });
     els.playerStage.classList.toggle('is-live', Boolean(isActive && snap.metadata?.isLive));
 
     if (!isActive) {
@@ -744,7 +749,16 @@
         if (buffer?.active) {
           const text = `原文件缓存 · ${buffer.profile} · ${(buffer.bytes / 1048576).toFixed(0)} / ${(buffer.maxBytes / 1048576).toFixed(0)} MB`;
           if (els.metricBuffer.textContent !== text) els.metricBuffer.textContent = text;
-          els.metricBuffer.title = buffer.targetSeconds ? `前向预读目标约 ${buffer.targetSeconds} 秒，按平均码率估算并受容量上限约束` : '正在识别视频分辨率';
+          const continuous = Number(buffer.contiguousAheadBytes) || 0;
+          els.metricBuffer.title = `当前读取位置起连续缓存 ${(continuous / 1048576).toFixed(1)} MB` + (buffer.estimatedAheadSeconds > 0 ? `，按平均码率约 ${Math.floor(buffer.estimatedAheadSeconds)} 秒` : '') + (buffer.targetSeconds ? `；目标约 ${buffer.targetSeconds} 秒，受容量上限约束` : '；正在识别视频分辨率');
+        }
+        const remux = msg.data.remuxBuffer;
+        if (els.metricRemux) {
+          els.metricRemux.hidden = !remux?.active;
+          if (remux?.active) {
+            els.metricRemux.textContent = `封装后缓存 · ${(remux.bytes / 1048576).toFixed(1)} / ${(remux.maxBytes / 1048576).toFixed(0)} MB`;
+            els.metricRemux.title = '已经完成兼容封装、等待播放器读取的数据；与原文件缓存及浏览器可播放秒数分别统计。';
+          }
         }
       } else if (msg.type === 'command' && msg.data?.type === 'seek') {
         if (Number.isFinite(msg.data.position)) {
@@ -927,7 +941,7 @@
         }
       }
     }
-    els.metricPerf.textContent = `FPS: ${fpsText}${dropText} | 缓冲: ${bufAhead.toFixed(1)}s`;
+    els.metricPerf.textContent = `FPS: ${fpsText}${dropText} | 可播放: ${bufAhead.toFixed(1)}s`;
   }, 1000);
 
   // UI Event Listeners
@@ -1076,7 +1090,9 @@
       return;
     }
     if (!currentState || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
-    if (key === ' ' || key === 'k') {
+    if (key === 's') {
+      event.preventDefault(); if (!event.repeat && currentState.mediaType === 'video') window.MobileTVSubtitles?.open();
+    } else if (key === ' ' || key === 'k') {
       // Space retains native activation for focused controls.
       if (key === ' ' && event.target?.closest?.('button, summary, a[href]')) return;
       event.preventDefault();

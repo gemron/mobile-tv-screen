@@ -22,19 +22,21 @@ async function profiles() {
     cache.setMedia(original, 'PLAYING');
     await cache.read('https://dl-pc-fixture.drive.quark.cn/video.mkv', {}, 'one', 'bytes=0-');
     cache.setPlaybackInfo({ width: 3840, height: 1608, duration: 1 }, original);
-    assert.equal(cache.stats().profile, '4K'); assert.equal(cache.stats().maxBytes, 256 * MIB);
+    assert.equal(cache.stats().profile, '4K'); assert.equal(cache.stats().maxBytes, 512 * MIB);
+    assert.equal(cache.stats().parallelLimit, 384, '4K has enough concurrent small ranges to fill its larger reserve');
     const highBitrate = cache.stats().aheadBytes;
     cache.setPlaybackInfo({ width: 3840, height: 1608, duration: 6000 }, original);
     assert.ok(cache.stats().aheadBytes < highBitrate, 'low bitrate does not prefetch the entire maximum window');
     assert.equal(cache.stats().targetSeconds, 180);
-    assert.ok(cache.stats().aheadBytes >= 64 * MIB && cache.stats().aheadBytes <= 192 * MIB);
-    for (const [width, height, label, capacity] of [[720,1280,'720p',64],[1920,1080,'1080p',128],[2560,1440,'2K',192],[2160,3840,'4K',256]]) {
+    assert.ok(cache.stats().aheadBytes >= 96 * MIB && cache.stats().aheadBytes <= 384 * MIB);
+    for (const [width, height, label, capacity] of [[720,1280,'720p',64],[1920,1080,'1080p',128],[2560,1440,'2K',256],[2160,3840,'4K',512]]) {
       cache.setPlaybackInfo({ width, height, duration: 6000 }, original);
       assert.equal(cache.stats().profile, label); assert.equal(cache.stats().maxBytes, capacity * MIB);
+      assert.equal(cache.stats().parallelLimit, label === '4K' ? 384 : label === '2K' ? 192 : 96);
     }
     assert.equal(cache.setPlaybackInfo({ width: 40000, height: 2160 }, original), false);
     assert.equal(cache.setPlaybackInfo({ width: 1280, height: 720 }, '/old-session'), false);
-    assert.equal(cache.stats().maxBytes, 256 * MIB);
+    assert.equal(cache.stats().maxBytes, 512 * MIB);
     await wait(() => cache.jobs.size === 0);
     assert.ok(cache.stats().bytes > 256 * 1024, 'cache grows with real data instead of allocating the maximum eagerly');
     offline = true;
@@ -44,6 +46,7 @@ async function profiles() {
     assert.equal(requests, beforeOutage, 'buffered playback does not wait for the unavailable source');
     cache.setMedia('/next-quality', 'PLAYING');
     assert.equal(cache.stats().maxBytes, 256 * 1024); assert.equal(cache.stats().bytes, 0);
+    assert.equal(cache.stats().parallelLimit, 2, 'stopping or changing media resets the speculative connection budget');
     assert.equal(cache.stats().profile, '默认'); assert.equal(cache.stats().active, false);
     assert.equal(cache.setPlaybackInfo({ width: 3840, height: 2160 }, original), false);
   } finally { cache.close(); }
@@ -64,7 +67,7 @@ async function integration() {
     send(tv, 3840, 1608);
     const status = () => fetch(base + '/api/status').then(r => r.json());
     await wait(async () => (await status()).originalCache.profile === '4K');
-    assert.equal((await status()).originalCache.maxBytes, 256 * MIB);
+    assert.equal((await status()).originalCache.maxBytes, 512 * MIB);
     await delay(550); send(tv, 3840, 1608);
     await wait(() => packets.some(packet => packet.type === 'progress' && packet.data.originalBuffer?.profile === '4K'));
     send(tv, 1280, 720);
