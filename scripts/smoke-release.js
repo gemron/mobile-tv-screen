@@ -142,6 +142,13 @@ main().catch(error => { console.error(error.stack || error); console.error('Diag
     const target = fs.realpathSync(sandbox);
     assert.equal(path.dirname(target).toLowerCase(), fs.realpathSync(os.tmpdir()).toLowerCase());
     assert.ok(path.basename(target).startsWith('MobileTV release check '));
-    fs.rmSync(target, { recursive: true, force: true });
+    try {
+      fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    } catch (error) {
+      // Antivirus and recently exited Windows child processes can temporarily
+      // retain file handles after all functional checks have completed.
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error.code)) throw error;
+      console.log('Temporary release test files retained at ' + target);
+    }
   }
 });
