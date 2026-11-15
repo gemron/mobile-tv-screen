@@ -1,7 +1,7 @@
 const { XMLParser } = require('fast-xml-parser');
 const { resource } = require('./http');
 const { json, webUrl, decodeFtyExtension, cleanHeaders } = require('./format');
-const htmlSites = require('./html-sites');
+const htmlSites = require('./providers');
 
 const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', trimValues: true });
 const array = value => value == null ? [] : Array.isArray(value) ? value : [value];
@@ -22,7 +22,7 @@ function describeSite(raw, base, index) {
       site.implementation = 'node-fty-t4';
     }
     if (![0, 1, 4].includes(site.type)) {
-      site.reason = /\.js(?:[?;]|$)/i.test(endpoint) ? '此 JavaScript 站点尚需移植为 Node.js 适配器' : '此站点的 Android 插件业务接口尚未移植';
+      site.reason = /^csp_AiDj/.test(endpoint) ? 'AI剧的原生设备注册、请求签名与加密媒体链路仍待移植' : /\.js(?:[?;]|$)/i.test(endpoint) ? '此 JavaScript 站点尚需移植为 Node.js 适配器' : '此站点的 Android 插件业务接口尚未移植';
       return site;
     }
     site.api = webUrl(endpoint, base);
@@ -60,7 +60,7 @@ function normalizeCatalog(data, base) {
     root = { list: array(list.video), class: array(rss.class?.ty).map(item => ({ type_id: item['@_id'], type_name: item['#text'] })), page: list['@_page'], pagecount: list['@_pagecount'], total: list['@_recordcount'] };
   } else if (!root.list && root.data) root = Array.isArray(root.data) ? { ...root, list: root.data } : { ...root, ...root.data };
   const classes = array(root.class || root.classes).filter(item => item && item.type_id != null).map(item => ({ id: String(item.type_id), name: text(item.type_name) }));
-  return { classes, filters: root.filters || {}, list: array(root.list).filter(item => item && typeof item === 'object').slice(0, MAX_ITEMS).map(item => normalizeVideo(item, base)), page: Math.max(1, Number(root.page) || 1), pageCount: Math.max(1, Number(root.pagecount || root.pageCount) || 1), total: Math.max(0, Number(root.total) || 0) };
+  return { classes, filters: root.filters || {}, notice: text(root.notice), list: array(root.list).filter(item => item && typeof item === 'object').slice(0, MAX_ITEMS).map(item => ({...normalizeVideo(item, base),folder:Boolean(item.folder)})), page: Math.max(1, Number(root.page) || 1), pageCount: Math.max(1, Number(root.pagecount || root.pageCount) || 1), total: Math.max(0, Number(root.total) || 0) };
 }
 
 async function requestCatalog(site, params, signal) {
@@ -103,7 +103,7 @@ async function category(site, { id = '', page = 1, keyword = '', filters = {} } 
 async function detail(site, id, signal) {
   if (site.adapter) {
     const raw = await htmlSites.detail(site, id, signal);
-    return { ...normalizeVideo(raw, site.api), lines: raw.lines };
+    return { ...normalizeVideo(raw, site.api), lines: raw.lines, ...(raw.searchTitle ? { searchTitle: text(raw.searchTitle) } : {}) };
   }
   const result = await requestCatalog(site, { ac: 'detail', ids: String(id).slice(0, 4000) }, signal);
   const data = normalizeCatalog(result.data, result.url);
@@ -128,7 +128,10 @@ async function resolve(site, line, episode, parsers, parserKey, signal) {
   if (site.adapter && !parser) result = await htmlSites.resolve(site, episode, signal);
   if (site.type === 4) result = (await requestCatalog(site, { play: episode.id, flag: line.name }, signal)).data;
   let url = String(result.url || result.data?.url || '').trim();
-  const headers = cleanHeaders({ ...site.headers, ...(typeof result.header === 'string' ? json(result.header) : result.header || result.headers || {}) });
+  if(result.localUrl&&/^\/api\/library\/torrent\/[a-f0-9]+\/\d+\/stream\.[a-z0-9]+$/.test(url))return {url,headers:{},mimeType:mediaHint(url)};
+  const defaults = { ...site.headers };
+  try { if (new URL(url, site.api).origin !== new URL(site.api).origin) { delete defaults.cookie; delete defaults.authorization; } } catch {}
+  const headers = cleanHeaders({ ...defaults, ...(typeof result.header === 'string' ? json(result.header) : result.header || result.headers || {}) });
   if (!url) throw new Error('站点没有返回播放地址');
   if (parser) {
     const address = parser.url.includes('{url}') ? parser.url.replace('{url}', encodeURIComponent(url)) : parser.url + encodeURIComponent(url);
@@ -160,7 +163,10 @@ async function resolve(site, line, episode, parsers, parserKey, signal) {
     url = webUrl(discovered, response.url);
     headers.referer ||= response.url;
   }
-  return { url: webUrl(url, site.api), headers, mimeType: mediaHint(url, result.type) };
+  const finalUrl = webUrl(url, site.api);
+  if (new URL(finalUrl).origin !== new URL(site.api).origin && result.credentialOrigin !== new URL(finalUrl).origin) { delete headers.cookie; delete headers.authorization; }
+  if (result.playlistContext) throw new Error('该线路的加密清单仍需专用适配，请暂时选择其他线路或站点');
+  return { url: finalUrl, audioUrl: result.audioUrl ? webUrl(result.audioUrl, site.api) : '', headers, isLive: Boolean(result.isLive), mimeType: mediaHint(url, result.type) };
 }
 
 module.exports = { describeSite, normalizeCatalog, normalizeVideo, home, category, detail, resolve, mediaHint };

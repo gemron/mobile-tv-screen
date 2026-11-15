@@ -173,12 +173,12 @@ async function createAppServer(options = {}) {
   app.use('/upnp', dlnaService.createRouter());
   app.use('/', airplayService.createRouter());
   if (enableTvbox) app.use('/', tvboxService.createRouter());
-  const proxyRouter = createProxyRouter();
+  const proxyRouter = createProxyRouter({dataDir:options.dataDir || DATA_DIR});
   app.use('/api', proxyRouter);
 
   // JSON parser scoped to API routes (after AirPlay raw parsers)
   app.use('/api', express.json({ limit: '2mb' }));
-  const libraryRouter = createLibraryRouter({ dataDir: options.dataDir || DATA_DIR });
+  const libraryRouter = createLibraryRouter({ dataDir: options.dataDir || DATA_DIR, adFilter: proxyRouter.adFilter });
   app.use('/api/library', libraryRouter);
 
   async function buildStatusPayload() {
@@ -533,7 +533,8 @@ async function createAppServer(options = {}) {
     airplayService,
     tvboxService,
     async close() {
-      libraryRouter.library.close();
+      await libraryRouter.library.close();
+      await proxyRouter.adFilter.close();
       proxyRouter.mediaCache.clear();
       castState.off('stateChange', onStateChange);
       castState.off('progress', onProgress);

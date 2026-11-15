@@ -37,14 +37,20 @@ function rc4(input, key) {
   return Buffer.from(input).map(value => { i = (i + 1) & 255; j = (j + state[i]) & 255; [state[i], state[j]] = [state[j], state[i]]; return value ^ state[(state[i] + state[j]) & 255]; });
 }
 
+function decodeFtyValue(value) {
+  const text = String(value || '').trim();
+  if (/^https?:\/\//.test(text)) return text;
+  if (!text || text.length > 128 * 1024 || !/^[A-Za-z0-9+/=]+$/.test(text)) throw new Error('站点扩展配置格式不兼容');
+  const decoded = rc4(Buffer.from(text, 'base64'), 'fantaiying921').toString('utf8');
+  return decoded.split('').map(character => String.fromCharCode((character.charCodeAt(0) - 2) & 65535)).join('');
+}
 function decodeFtyExtension(value) {
   if (value && typeof value === 'object') return value;
   const text = String(value || '').trim();
   if (text.startsWith('{')) return json(text);
   if (!text || text.length > 128 * 1024 || !/^[A-Za-z0-9+/=]+$/.test(text)) throw new Error('站点扩展配置格式不兼容');
-  const decoded = rc4(Buffer.from(text, 'base64'), 'fantaiying921').toString('utf8');
   // The shift applies to UTF-16 code units, rather than UTF-8 bytes.
-  const plain = decoded.split('').map(character => String.fromCharCode((character.charCodeAt(0) - 2) & 65535)).join('');
+  const plain = decodeFtyValue(text);
   const result = json(plain);
   if (!result || typeof result !== 'object' || !result.siteUrl) throw new Error('站点扩展配置未包含有效接口');
   return result;
@@ -57,13 +63,14 @@ function webUrl(value, base) {
 }
 
 function cleanHeaders(value = {}) {
-  const allowed = new Set(['user-agent', 'referer', 'origin', 'cookie', 'authorization', 'accept']);
+  const allowed = new Set(['user-agent', 'referer', 'origin', 'cookie', 'authorization', 'accept', 'accept-language', 'content-type', 'sign', 't', 'deviceid', 'version', 'app-version', 'app-id', 'appkey', 'timestamp', 'token', 'os', 'app', 'plat', 'platform', 'x-requested-with', 'x-listening-session', 'x-listening-timezone']);
   const result = {};
+  for(const name of ['key','api-ver','ver','code','client-version','packagename','app_id','channel_code','cur_time','device_id','mob_mfr','mobmodel','package_name','sys_platform','sysrelease','x-share-token','x-device-id','x-signature'])allowed.add(name);
   for (const [name, raw] of Object.entries(value && typeof value === 'object' ? value : {})) {
     const text = String(raw);
-    if (allowed.has(name.toLowerCase()) && text.length <= 4096 && !/[\r\n\0]/.test(text)) result[name.toLowerCase()] = text;
+    if (allowed.has(name.toLowerCase()) && text.length <= (name.toLowerCase()==='cookie'?16000:4096) && !/[\r\n\0]/.test(text)) result[name.toLowerCase()] = text;
   }
   return result;
 }
 
-module.exports = { json, decodeDocument, decodeFtyExtension, rc4, webUrl, cleanHeaders, MAX_DOCUMENT };
+module.exports = { json, decodeDocument, decodeFtyExtension, decodeFtyValue, rc4, webUrl, cleanHeaders, MAX_DOCUMENT };

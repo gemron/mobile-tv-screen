@@ -32,9 +32,12 @@ async function resource(address, { headers = {}, signal, limit = MAX_DOCUMENT, t
 
 module.exports = { resource };
 
-async function postJson(address, body, { headers = {}, signal, timeout = 20000 } = {}) {
+async function postResource(address, body, { headers = {}, signal, timeout = 20000, contentType = 'application/json' } = {}) {
   const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
-  const response = await fetch(webUrl(address), { method: 'POST', headers: { ...cleanHeaders(headers), 'content-type': 'application/json' }, body: JSON.stringify(body), signal: combined, redirect: 'error' });
+  const requestHeaders = cleanHeaders(headers);
+  const multipart = body instanceof FormData;
+  if (multipart) delete requestHeaders['content-type']; else requestHeaders['content-type'] = contentType;
+  const response = await fetch(webUrl(address), { method: 'POST', headers: requestHeaders, body: multipart || typeof body === 'string' ? body : JSON.stringify(body), signal: combined, redirect: 'error' });
   if (!response.ok) { await response.body?.cancel(); throw new Error(`远端接口返回 HTTP ${response.status}`); }
   const chunks = []; let size = 0;
   for await (const chunk of response.body) {
@@ -42,6 +45,8 @@ async function postJson(address, body, { headers = {}, signal, timeout = 20000 }
     if (size > MAX_DOCUMENT) throw new Error('解析接口响应超过大小限制');
     chunks.push(chunk);
   }
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  const buffer = Buffer.concat(chunks);
+  return { body: buffer, text: buffer.toString('utf8'), url: response.url, headers: Object.fromEntries(response.headers) };
 }
-module.exports.postJson = postJson;
+module.exports.postResource = postResource;
+module.exports.postJson = async (url, body, options) => JSON.parse((await postResource(url, body, options)).text);

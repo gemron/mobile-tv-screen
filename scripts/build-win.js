@@ -58,7 +58,7 @@ async function main() {
   copy(path.join(root, 'package.json'), path.join(app, 'package.json'));
   copy(path.join(root, 'package-lock.json'), path.join(app, 'package-lock.json'));
   for (const file of ['README.md', 'LICENSE', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'CONTRIBUTING.md']) copy(path.join(root, file), path.join(release, file));
-  copy(path.join(root, 'docs', 'images'), path.join(release, 'docs', 'images'));
+  copy(path.join(root, 'docs'), path.join(release, 'docs'));
   copy(path.join(root, 'docs', 'CONTENT_SOURCES.md'), path.join(release, 'docs', 'CONTENT_SOURCES.md'));
   const dependencies = [];
   for (const [relative, entry] of Object.entries(lock.packages)) {

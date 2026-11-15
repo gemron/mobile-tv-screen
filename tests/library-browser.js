@@ -76,9 +76,12 @@ async function run() {
     const response = await fetch(base + '/api/library/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: 'http://www.\u996d\u592a\u786c.cc/tv' }) });
     assert.ok(response.ok); const config = await response.json(), sites = config.sites.filter(value => value.supported), failures = [];
     const onlySite = process.argv.find(value => value.startsWith('--site='))?.slice(7);
-    for (const site of sites.filter(item => process.argv.includes('--real-source') && (!onlySite || item.key === onlySite))) {
+    const selectedSites = sites.filter(item => process.argv.includes('--real-source') && (!onlySite || item.key === onlySite || item.implementation?.toLowerCase().endsWith('-' + onlySite.toLowerCase())));
+    if (process.argv.includes('--real-source')) assert.ok(selectedSites.length, 'No site matched --site=' + onlySite);
+    for (const site of selectedSites) {
       try {
-        const home = await (await fetch(base + '/api/library/home?site=' + encodeURIComponent(site.key))).json();
+        let home = await (await fetch(base + '/api/library/home?site=' + encodeURIComponent(site.key))).json();
+        if (!home.list?.length && home.classes?.length) home = await (await fetch(base + '/api/library/list?' + new URLSearchParams({site:site.key,category:home.classes[0].id,page:'1'}))).json();
         assert.ok(home.list?.length, JSON.stringify(home));
         const play = await fetch(base + '/api/library/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ siteKey: site.key, vodId: home.list[0].id }) });
         const result = await play.json(); assert.ok(play.ok, JSON.stringify(result));

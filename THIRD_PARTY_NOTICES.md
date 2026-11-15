@@ -9,6 +9,8 @@ MobileTV 自有源码采用 MIT 许可证，第三方组件不因此变更其许
 | hls.js | HLS 播放 | Apache-2.0；[上游](https://github.com/video-dev/hls.js) |
 | mpegts.js | FLV / MPEG-TS 浏览器播放能力 | Apache-2.0；[上游](https://github.com/xqq/mpegts.js) |
 | Cheerio | 站点 HTML 数据解析 | MIT；[上游](https://github.com/cheeriojs/cheerio) |
+| Acorn | 仅提取订阅脚本中的数据字面量 | MIT；[上游](https://github.com/acornjs/acorn) |
+| WebTorrent、fs-chunk-store | 磁力文件元数据、P2P 和有界临时缓存 | MIT；[WebTorrent](https://github.com/webtorrent/webtorrent)、[fs-chunk-store](https://github.com/webtorrent/fs-chunk-store) |
 | jsonc-parser | 带注释的订阅配置解析 | MIT；[上游](https://github.com/microsoft/node-jsonc-parser) |
 | Express、ws、bonjour-service、plist 等 | HTTP、WebSocket、发现与数据解析 | 以各 npm 包和传递依赖中的许可文件为准 |
 

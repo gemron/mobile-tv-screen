@@ -895,6 +895,13 @@
   els.selectStreamMode.addEventListener('change', () => {
     postControl({ action: 'display', streamMode: els.selectStreamMode.value });
   });
+  document.addEventListener('mobiletv-adfilter-change', () => {
+    if (!currentState?.url || !['video','audio'].includes(currentState.mediaType) || ['IDLE','STOPPED'].includes(currentState.status)) return;
+    if (activeStreamMode === 'transcode') { window.MobileTVUI?.toast('过滤规则已保存，切换到自动连接后生效'); return; }
+    if (activeStreamMode === 'direct') { postControl({ action: 'display', streamMode: 'proxy' }); return; }
+    pendingStartPos = playbackPosition(); pendingStartUnit = 'seconds'; fallbackStage = 0;
+    attachVideoOrAudioStream(currentState.url, activeStreamMode, pendingStartPos);
+  });
   els.btnRotate.addEventListener('click', () => {
     const next = ((currentState?.rotation || 0) + 90) % 360;
     postControl({ action: 'display', rotation: next });

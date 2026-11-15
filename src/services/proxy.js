@@ -8,6 +8,7 @@ const express = require('express');
 const castState = require('./castState');
 const { SegmentCache } = require('./segmentCache');
 const mediaHeaders = require('./mediaHeaders');
+const { HlsAdFilter } = require('./hlsAdFilter');
 
 // Persistent HTTP/HTTPS connection pools eliminate repeated TCP/TLS handshakes across HLS segments and Range seeks
 const httpAgent = new http.Agent({
@@ -144,12 +145,12 @@ async function openUpstreamStream(targetUrl, reqHeaders, maxRedirects = 5, signa
  */
 function rewriteM3u8(content, baseUrl, explicitReferer = '', headerContext = '') {
   const refParam = (explicitReferer ? `&referer=${encodeURIComponent(explicitReferer)}` : '') + (headerContext ? `&headerContext=${encodeURIComponent(headerContext)}` : '');
-  const toProxyUrl = (rawUri) => {
+  const toProxyUrl = (rawUri, playlist = false) => {
     const abs = new URL(rawUri, baseUrl).toString();
-    return `/api/proxy?url=${encodeURIComponent(abs)}${refParam}`;
+    return `/api/proxy?url=${encodeURIComponent(abs)}${refParam}${playlist ? '&hls=1' : ''}`;
   };
 
-  const lines = content.split(/\r?\n/);
+  const lines = content.replace(/\r+/g, '').split('\n'); let variant = false;
   return lines
     .map((line) => {
       const trimmed = line.trim();
@@ -157,9 +158,10 @@ function rewriteM3u8(content, baseUrl, explicitReferer = '', headerContext = '')
 
       // Rewrite URI="..." inside tags such as #EXT-X-KEY, #EXT-X-MAP, #EXT-X-MEDIA
       if (trimmed.startsWith('#')) {
+        if (trimmed.startsWith('#EXT-X-STREAM-INF:')) variant = true;
         if (trimmed.includes('URI="')) {
           return line.replace(/URI="([^"]+)"/g, (original, uri) => {
-            try { return `URI="${toProxyUrl(uri)}"`; } catch { return original; }
+            try { return `URI="${toProxyUrl(uri, /^#EXT-X-(?:MEDIA|I-FRAME-STREAM-INF):/.test(trimmed))}"`; } catch { return original; }
           });
         }
         return line;
@@ -167,7 +169,7 @@ function rewriteM3u8(content, baseUrl, explicitReferer = '', headerContext = '')
 
       // Non-comment lines are media segment or variant playlist URIs
       try {
-        return toProxyUrl(trimmed);
+        const result = toProxyUrl(trimmed, variant); variant = false; return result;
       } catch {
         return line;
       }
@@ -190,6 +192,10 @@ function createProxyRouter(options = {}) {
   const router = express.Router();
   const cache = new SegmentCache(options.cache);
   router.mediaCache = cache;
+  const adFilter = options.adFilter || new HlsAdFilter({dataDir:options.dataDir});
+  router.adFilter = adFilter;
+  router.get('/adfilter', (req,res) => res.json(adFilter.summary()));
+  router.post('/adfilter', express.json({limit:'64kb'}), (req,res) => { try { res.json(adFilter.save(req.body||{})); } catch(error) { res.status(error.status||500).json({error:error.message}); } });
 
   router.options('/proxy', (req, res) => {
     res.set({
@@ -204,7 +210,7 @@ function createProxyRouter(options = {}) {
     const targetUrl = String(req.query.url || '').trim();
     const explicitReferer = String(req.query.referer || '').trim();
     const headerContext = String(req.query.headerContext || '');
-    const customHeaders = headerContext ? mediaHeaders.get(headerContext) : {};
+    const customHeaders = headerContext ? mediaHeaders.get(headerContext,targetUrl) : {};
     if (!customHeaders) { res.status(410).json({ error: '播放请求头已过期，请重新选择节目' }); return; }
     if (!targetUrl) {
       res.status(400).json({ error: 'Missing url parameter' });
@@ -275,7 +281,7 @@ function createProxyRouter(options = {}) {
     const contentType = upRes.headers['content-type'] || 'application/octet-stream';
 
     // Handle HLS playlists by rewriting segment & sub-playlist URLs
-    if (req.method !== 'HEAD' && isM3u8Response(finalUrl, contentType) && (upRes.statusCode || 200) < 400) {
+    if (req.method !== 'HEAD' && (req.query.hls === '1' || isM3u8Response(finalUrl, contentType) || /[?&](?:type|format)=m3u8(?:&|$)/i.test(finalUrl)) && (upRes.statusCode || 200) < 400) {
       cacheFill?.cancel();
       const chunks = [];
       let totalSize = 0;
@@ -291,9 +297,12 @@ function createProxyRouter(options = {}) {
         }
       });
 
-      upRes.on('end', () => {
+      upRes.on('end', async () => {
         if (clientClosed || res.destroyed || res.headersSent) return;
-        const bodyText = Buffer.concat(chunks).toString('utf8');
+        let bodyText = Buffer.concat(chunks).toString('utf8');
+        const filtered = await adFilter.filter(bodyText, finalUrl);
+        if (clientClosed || res.destroyed || res.headersSent) return;
+        bodyText = filtered.content;
         cache.registerPlaylist(bodyText, finalUrl, cacheScope);
         const rewritten = rewriteM3u8(bodyText, finalUrl, explicitReferer, headerContext);
         res.status(upRes.statusCode || 200);
@@ -301,6 +310,8 @@ function createProxyRouter(options = {}) {
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
           'Access-Control-Allow-Origin': '*',
           'Cache-Control': 'no-cache',
+          'X-Ad-Filter': filtered.reason,
+          'X-Ad-Filter-Segments': String(filtered.removed),
         });
         res.send(rewritten);
       });
@@ -349,9 +360,14 @@ function createProxyRouter(options = {}) {
     const targetUrl = String(req.query.url || '').trim();
     const explicitReferer = String(req.query.referer || '').trim();
     const headerContext = String(req.query.headerContext || '');
-    const customHeaders = headerContext ? mediaHeaders.get(headerContext) : {};
+    const customHeaders = headerContext ? mediaHeaders.get(headerContext,targetUrl) : {};
     if (!customHeaders) { res.status(410).end('播放请求已过期，请重新选择节目'); return; }
     const reencode = req.query.reencode === '1';
+    let audioUrl = String(req.query.audioUrl || '');
+    if (audioUrl) {
+      try { if (!['http:', 'https:'].includes(new URL(audioUrl).protocol)) throw new Error(); }
+      catch { res.status(400).end('Invalid audio URL'); return; }
+    }
     const startPosition = Math.max(0, Math.min(7 * 24 * 3600, Number(req.query.start) || 0));
 
     if (!targetUrl) {
@@ -380,6 +396,12 @@ function createProxyRouter(options = {}) {
 
     if (startPosition > 0) args.push('-ss', String(startPosition));
     args.push('-i', targetUrl);
+    if (audioUrl) {
+      const audioHeaders = { ...Object.fromEntries(Object.entries(resolveUpstreamHeaders(headerContext ? '' : audioUrl, explicitReferer)).map(([key,value])=>[key.toLowerCase(),value])), ...(headerContext ? mediaHeaders.get(headerContext,audioUrl) : {}) };
+      args.push('-headers', Object.entries(audioHeaders).map(([key,value])=>`${key}: ${value}`).join('\r\n')+'\r\n');
+      if (startPosition > 0) args.push('-ss', String(startPosition));
+      args.push('-i', audioUrl, '-map', '0:v:0', '-map', '1:a:0?', '-shortest');
+    }
 
     if (reencode) {
       args.push(

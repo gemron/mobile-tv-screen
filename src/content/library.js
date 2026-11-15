@@ -8,13 +8,30 @@ const catalog = require('./catalog');
 const mediaHeaders = require('../services/mediaHeaders');
 const { DATA_DIR } = require('../utils/paths');
 const castState = require('../services/castState');
+const { SourceBrowser } = require('./browser');
+const { SourceMaterial } = require('./material');
+const { RuntimeData } = require('./runtime-data');
+const { Accounts } = require('./accounts');
+const { Cloud } = require('./cloud');
+const { Torrents } = require('./torrents');
 
 const idFor = value => createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
 const failure = (message, status = 400) => Object.assign(new Error(message), { status });
 
 class Library {
-  constructor({ dataDir = DATA_DIR, fetchResource = resource } = {}) {
+  constructor({ dataDir = DATA_DIR, fetchResource = resource, adFilter } = {}) {
+    this.adFilter = adFilter;
     this.file = path.join(dataDir, 'library-config.json');
+    this.overridesFile = path.join(dataDir, 'library-overrides.json'); this.overrides = {};
+    try { this.overrides = JSON.parse(fs.readFileSync(this.overridesFile, 'utf8')); } catch {}
+    this.browser = new SourceBrowser(dataDir);
+    this.runtime = new RuntimeData(dataDir);
+    this.accounts = new Accounts(dataDir,this.browser); this.cloud = new Cloud(this.accounts,this.browser);
+    this.torrents = new Torrents(dataDir);
+    this.onCastChange = state => {
+      if (this.torrents.active?.selected >= 0 && (state.protocol !== 'Library' || !state.url.startsWith('/api/library/torrent/') || ['IDLE', 'STOPPED'].includes(state.status))) this.torrents.stop().catch(() => {});
+    };
+    castState.on('stateChange', this.onCastChange);
     this.fetchResource = fetchResource;
     this.config = null; this.sites = []; this.liveSources = []; this.parsers = []; this.repositories = [];
     this.cache = new Map(); this.cacheBytes = 0; this.generation = 0; this.playback = null; this.importController = null; this.playController = null;
@@ -27,8 +44,20 @@ class Library {
   apply(document, url, importedAt = Date.now()) {
     if (!document || typeof document !== 'object' || Array.isArray(document) || !['sites', 'lives', 'live', 'urls'].some(key => Array.isArray(document[key]))) throw failure('未找到点播站点、直播列表或配置仓');
     this.config = { url, importedAt, document };
+    this.adFilter?.setSubscription(document);
     this.sites = (document.sites || []).filter(site => site && typeof site === 'object').slice(0, 300).map((site, index) => catalog.describeSite(site, url, index));
     const seen = new Set(); this.sites = this.sites.filter(site => { if (seen.has(site.key)) return false; seen.add(site.key); return true; });
+    const material = new SourceMaterial(document.spider, url);
+    for (const site of this.sites) {
+      site.browser = this.browser;
+      site.material = material;
+      site.accounts = this.accounts; site.cloud = this.cloud;
+      site.torrents = this.torrents;
+      const override = this.overrides?.[site.key];
+      if (override?.endpoint) { site.api = override.endpoint; site.endpointOverride = true; site.headers.referer = new URL(override.endpoint).origin + '/'; }
+      if (override?.cookie) site.headers.cookie = override.cookie;
+      site.runtime = this.runtime?.scope(site.adapter || site.implementation, site.api);
+    }
     this.liveSources = (document.lives || document.live || []).filter(item => item && typeof item === 'object').slice(0, 200).map((item, index) => {
       const source = { key: idFor(index + ':' + (item.name || item.url)), name: String(item.name || `直播源 ${index + 1}`), headers: cleanHeaders({ ...(item.header || item.headers || {}), ...(item.ua ? { 'user-agent': item.ua } : {}) }), channels: Array.isArray(item.channels) ? item.channels : null, supported: true };
       try {
@@ -48,6 +77,26 @@ class Library {
 
   summary() {
     return { url: this.config?.url || '', importedAt: this.config?.importedAt || null, sites: this.sites.map(({ key, name, type, supported, reason, implementation }) => ({ key, name, type, supported, reason, implementation })), lives: this.liveSources.map(({ key, name, supported, reason }) => ({ key, name, supported, reason })), parsers: this.parsers.map(({ key, name, type }) => ({ key, name, type })), repositories: this.repositories, implementation: 'nodejs' };
+  }
+
+  siteSettings(key) {
+    const site = this.sites.find(value => value.key === String(key));
+    if (!site) throw failure('站点不存在', 404);
+    const value = this.overrides[site.key] || {};
+    return { siteKey: site.key, name: site.name, endpoint: value.endpoint || site.api, hasCookie: Boolean(value.cookie), browser: Boolean(this.browser) };
+  }
+
+  saveSiteSettings({siteKey, endpoint, cookie}) {
+    this.siteSettings(siteKey);
+    const next = {...this.overrides[siteKey]};
+    if (endpoint != null) { if (String(endpoint).trim()) next.endpoint = webUrl(endpoint); else delete next.endpoint; }
+    if (cookie != null) { if (String(cookie).length > 16000 || /[\r\n\0]/.test(cookie)) throw failure('Cookie 格式或长度不符合要求'); if(cookie)next.cookie=String(cookie);else delete next.cookie; }
+    const overrides = {...this.overrides,[siteKey]:next};
+    fs.mkdirSync(path.dirname(this.overridesFile),{recursive:true});
+    fs.writeFileSync(this.overridesFile+'.tmp',JSON.stringify(overrides),{encoding:'utf8',mode:0o600});fs.renameSync(this.overridesFile+'.tmp',this.overridesFile);
+    this.overrides = overrides;
+    if(this.config)this.apply(this.config.document,this.config.url,this.config.importedAt);
+    return this.siteSettings(siteKey);
   }
 
   async import(address) {
@@ -104,6 +153,24 @@ class Library {
   list(key, options) { const site = this.site(key); return this.cached('list:' + key + JSON.stringify(options), 60000, () => catalog.category(site, options)); }
   detail(key, id) { const site = this.site(key); return this.cached('detail:' + key + ':' + id, 300000, () => catalog.detail(site, id)); }
 
+  async searchAll(keyword) {
+    keyword = String(keyword || '').trim().slice(0, 200);
+    if (!keyword) throw failure('请输入片名');
+    const sources = this.sites.filter(site => site.supported && !/^(cloud-|sports-|discovery-|yueting)/.test(site.adapter || '') && !['huya','douyu','alllive','xiaobei','extra-Kanqiu','extra-Music','extra-XPath','extra-YGP','extra-SixV'].includes(site.adapter));
+    const deadline = AbortSignal.timeout(15000), results = [], errors = []; let cursor = 0;
+    const worker = async () => {
+      while (cursor < sources.length && !deadline.aborted) {
+        const site = sources[cursor++];
+        try {
+          const data = await catalog.category(site, { keyword, page: 1 }, AbortSignal.any([deadline, AbortSignal.timeout(6000)]));
+          for (const item of data.list.slice(0, 20)) results.push({ ...item, siteKey: site.key, sourceName: site.name });
+        } catch (error) { errors.push({ siteKey: site.key, name: site.name, error: error.message }); }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    return { list: results.slice(0, 300), errors, page: 1, pageCount: 1, notice: results.length ? `在导入的源中找到 ${results.length} 个结果，请核对片名和年份后选择。` : '本次未找到片源，可切换站点单独搜索或稍后重试。' };
+  }
+
   async channels(key, refresh = false) {
     const source = this.liveSources.find(item => item.key === String(key));
     if (!source) throw failure('直播源不存在', 404);
@@ -133,7 +200,7 @@ class Library {
     if (!episode) throw failure('所选播放线路或剧集不存在');
     const resolved = await catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal);
     if (controller.signal.aborted || generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
-    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType }, clientName: '电脑独立点播', autoPlay: true });
+    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true });
     this.playback = { kind: 'vod', siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
     return { state, playback: this.playbackSummary() };
   }
@@ -163,7 +230,7 @@ class Library {
     return this.playLive({ sourceKey: current.sourceKey, channelId: next.id });
   }
 
-  close() { this.importController?.abort(); this.playController?.abort(); this.cache.clear(); this.cacheBytes = 0; }
+  close() { castState.off('stateChange',this.onCastChange); this.importController?.abort(); this.playController?.abort(); this.cache.clear(); this.cacheBytes = 0; return Promise.allSettled([this.browser.close(),this.torrents.close()]); }
 }
 
 module.exports = { Library };

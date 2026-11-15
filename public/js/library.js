@@ -1,7 +1,7 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  const state = { config: null, mode: 'cast', site: '', category: '', keyword: '', page: 1, pages: 1, detail: null, line: 0, channels: [], channelLimit: 300, liveSource: '', playback: null, request: 0, fetching: null };
+  const state = { config: null, mode: 'cast', site: '', category: '', keyword: '', filters: {}, filterDefinitions: {}, page: 1, pages: 1, detail: null, line: 0, channels: [], channelLimit: 300, liveSource: '', playback: null, request: 0, fetching: null };
   const toast = message => window.MobileTVUI?.toast(message);
   const node = (tag, className, value) => { const element = document.createElement(tag); if (className) element.className = className; if (value != null) element.textContent = value; return element; };
   const option = (value, label, disabled = false) => { const element = node('option', '', label); element.value = value; element.disabled = disabled; return element; };
@@ -9,7 +9,7 @@
   async function api(route, body, signal) {
     const response = await fetch('/api/library' + route, { ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), signal });
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || '操作失败，请重试');
+    if (!response.ok) { if(result.verifyUrl) state.verifyUrl=result.verifyUrl; throw Object.assign(new Error(result.error || '操作失败，请重试'),{verifyUrl:result.verifyUrl}); }
     return result;
   }
   function begin() { state.fetching?.abort(); state.fetching = new AbortController(); return { id: ++state.request, signal: state.fetching.signal }; }
@@ -29,7 +29,7 @@
   function renderConfig(config) {
     state.config = config; $('librarySourceUrl').value = config.url || '';
     const supported = config.sites.filter(site => site.supported);
-    $('libraryCompatibility').textContent = config.url ? `${config.sites.length} 个站点 · ${supported.length} 个已适配 · ${config.lives.length} 组直播` : '支持 TVBox 配置、通用点播接口与 M3U / TXT / JSON 直播列表';
+    $('libraryCompatibility').textContent = config.url ? `${config.sites.length} 个条目 · ${supported.length} 个已接入 · ${config.lives.length} 组直播（可播性取决于源与账号）` : '支持 TVBox 配置、通用点播接口与 M3U / TXT / JSON 直播列表';
     const siteSelect = $('librarySite'); siteSelect.replaceChildren();
     for (const site of [...supported, ...config.sites.filter(item => !item.supported)]) siteSelect.append(option(site.key, site.name + (site.supported ? '' : '（待适配）'), !site.supported));
     state.site = supported.some(item => item.key === state.site) ? state.site : supported[0]?.key || ''; siteSelect.value = state.site;
@@ -60,38 +60,50 @@
     $('libraryCategories').replaceChildren();
     for (const category of [{ id: '', name: '推荐' }, ...classes]) {
       const button = node('button', 'category-pill' + (state.category === category.id ? ' active' : ''), category.name); button.type = 'button';
-      button.addEventListener('click', () => { state.category = category.id; state.keyword = ''; $('librarySearch').value = ''; for (const item of $('libraryCategories').children) item.classList.toggle('active', item === button); if (!category.id) loadHome(); else loadList(1); });
+      button.addEventListener('click', () => { state.category = category.id; state.keyword = ''; state.filters = {}; renderFilters(); $('librarySearch').value = ''; for (const item of $('libraryCategories').children) item.classList.toggle('active', item === button); if (!category.id) loadHome(); else loadList(1); });
       $('libraryCategories').append(button);
+    }
+  }
+
+  function renderFilters() {
+    const definitions = state.filterDefinitions[state.category] || [];
+    $('libraryFilters').replaceChildren(); $('libraryFilters').hidden = !definitions.length;
+    for (const field of definitions.slice(0, 12)) {
+      if (!field.key || !Array.isArray(field.value)) continue;
+      const label = node('label', '', field.name || field.key), select = node('select', 'library-select');
+      for (const choice of field.value.slice(0, 1000)) select.append(option(String(choice.v ?? ''), String(choice.n ?? choice.v ?? '全部')));
+      select.value = state.filters[field.key] ?? select.options[0]?.value ?? ''; state.filters[field.key] = select.value;
+      select.addEventListener('change', () => { state.filters[field.key] = select.value; loadList(1); }); label.append(select); $('libraryFilters').append(label);
     }
   }
 
   function renderVideos(data) {
     state.page = data.page; state.pages = data.pageCount;
     $('libraryResults').replaceChildren();
-    if (!data.list.length) placeholder('没有找到影片，换个关键词或分类试试。');
+    if (!data.list.length) placeholder(data.notice || '没有找到影片，换个关键词或分类试试。');
     else for (const video of data.list) {
       const card = node('button', 'vod-card'); card.type = 'button'; card.title = video.title;
       const artwork = node('div', 'vod-artwork');
       if (video.picture) { const img = node('img'); img.src = video.picture; img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.addEventListener('error', () => { img.hidden = true; }); artwork.append(img); }
       if (video.remarks) artwork.append(node('span', 'vod-remark', video.remarks));
-      card.append(artwork, node('strong', 'vod-title', video.title), node('span', 'vod-meta', [video.year, video.area, video.category].filter(Boolean).join(' · ')));
-      card.addEventListener('click', () => showDetail(video.id)); $('libraryResults').append(card);
+      card.append(artwork, node('strong', 'vod-title', video.title), node('span', 'vod-meta', [video.sourceName, video.year, video.area, video.category].filter(Boolean).join(' · ')));
+      card.addEventListener('click', () => { if(video.siteKey){state.site=video.siteKey;$('librarySite').value=video.siteKey;} if(video.folder){state.category=video.id;loadList(1);}else showDetail(video.id); }); $('libraryResults').append(card);
     }
     $('libraryPager').hidden = !data.list.length || data.pageCount <= 1;
     $('libraryPage').textContent = `${data.page} / ${data.pageCount}`;
     $('libraryPrevious').disabled = data.page <= 1; $('libraryMore').disabled = data.page >= data.pageCount;
-    status(`${data.list.length} 个结果${data.total ? ` · 共 ${data.total} 项` : ''}`);
+    status(data.notice || `${data.list.length} 个结果${data.total ? ` · 共 ${data.total} 项` : ''}`);
   }
 
   async function loadHome() {
     if (!state.site) return;
     const request = begin(); state.category = ''; state.keyword = ''; state.page = 1; status('正在加载影片…'); placeholder('正在加载…');
-    try { const data = await api('/home?site=' + encodeURIComponent(state.site), undefined, request.signal); if (request.id !== state.request) return; renderCategories(data.classes); renderVideos(data); }
+    try { const data = await api('/home?site=' + encodeURIComponent(state.site), undefined, request.signal); if (request.id !== state.request) return; state.filterDefinitions = data.filters || {}; state.filters = {}; renderCategories(data.classes); renderFilters(); renderVideos(data); }
     catch (error) { if (error.name !== 'AbortError') { placeholder('站点暂时没有响应，可切换其他站点或重试。'); report(error); } }
   }
   async function loadList(page) {
     const request = begin(); status('正在读取列表…');
-    try { const query = new URLSearchParams({ site: state.site, category: state.category, keyword: state.keyword, page: String(page) }); const data = await api('/list?' + query, undefined, request.signal); if (request.id === state.request) renderVideos(data); }
+    try { const query = new URLSearchParams({ site: state.site, category: state.category, keyword: state.keyword, page: String(page), filters: JSON.stringify(state.filters) }); const data = await api('/list?' + query, undefined, request.signal); if (request.id === state.request) renderVideos(data); }
     catch (error) { report(error); }
   }
 
@@ -109,10 +121,18 @@
   function renderEpisodes() {
     $('libraryEpisodes').replaceChildren();
     const episodes = state.detail?.lines[state.line]?.episodes || [];
-    if (!episodes.length) { $('libraryEpisodes').append(node('p', 'field-hint', '站点没有返回可选剧集')); return; }
+    if (!episodes.length) {
+      if (state.detail?.searchTitle) {
+        const button=node('button','btn btn-primary','查找片源');button.type='button';
+        button.addEventListener('click', async()=>{const title=state.detail.searchTitle;$('libraryDetail').close();status('正在搜索已导入的点播源…');const request=begin();try{const data=await api('/search/all?keyword='+encodeURIComponent(title),undefined,request.signal);if(request.id===state.request)renderVideos(data);}catch(error){report(error);}});
+        $('libraryEpisodes').append(button);
+      } else $('libraryEpisodes').append(node('p', 'field-hint', '站点没有返回可选剧集')); return;
+    }
     for (let index = 0; index < episodes.length; index++) { const button = node('button', 'episode-button', episodes[index].name); button.type = 'button'; if (state.playback?.vodId === state.detail.id && state.playback?.line === state.line && state.playback?.index === index) button.classList.add('active'); button.addEventListener('click', () => playEpisode(index, button)); $('libraryEpisodes').append(button); }
   }
   async function playEpisode(index, button) {
+    const episode = state.detail?.lines[state.line]?.episodes[index];
+    if (episode?.id.startsWith('magnet:?')) { $('libraryDetail').close(); await showDetail(episode.id); return; }
     button.disabled = true; $('libraryDetailStatus').textContent = '正在解析播放地址…';
     try { const result = await api('/play', { siteKey: state.site, vodId: state.detail.id, line: state.line, index, parserKey: $('libraryParser').value }); state.playback = result.playback; $('libraryDetail').close(); $('libraryDetailStatus').textContent = ''; updateControls(); }
     catch (error) { $('libraryDetailStatus').textContent = error.message; }
@@ -167,7 +187,36 @@
 
   for (const button of document.querySelectorAll('[data-library-nav]')) button.addEventListener('click', () => setMode(button.dataset.libraryNav));
   $('librarySourceForm').addEventListener('submit', event => { event.preventDefault(); importSource($('librarySourceUrl').value); });
-  $('librarySite').addEventListener('change', () => { state.site = $('librarySite').value; $('librarySearch').value = ''; loadHome(); });
+  $('libraryRetry').addEventListener('click', () => state.mode === 'live' ? loadChannels(true) : loadHome());
+  $('librarySiteBrowser').addEventListener('click', async () => { if (!state.site) return; try { await api('/browser/open', { siteKey: state.site, verifyUrl:state.verifyUrl||'' }); status('已打开独立站点浏览器，完成验证或登录后点击“重试”。'); } catch(error) { report(error); } });
+  $('librarySiteSettings').addEventListener('click', async () => {
+    if (!state.site) return;
+    try { const value = await api('/site/settings?site=' + encodeURIComponent(state.site)); $('librarySettingsTitle').textContent = value.name; $('libraryEndpoint').value = /^https?:/.test(value.endpoint) ? value.endpoint : ''; $('libraryCookie').value = ''; $('libraryRemoveCookie').checked = false; $('libraryAccountStatus').textContent = value.hasCookie ? '已保存账号，留空不会覆盖。站点浏览器使用独立的本机登录状态。' : '尚未手动保存账号。可粘贴自己的 Cookie，或使用站点浏览器完成登录。'; $('librarySettingsStatus').textContent = ''; $('librarySettingsDialog').showModal(); } catch(error) { report(error); }
+  });
+  $('libraryCloseSettings').addEventListener('click', () => $('librarySettingsDialog').close());
+  let accounts = [];
+  function renderAccount() {
+    const provider = $('libraryAccountProvider').value, account = accounts.find(a => a.provider === provider);
+    $('libraryAliTokens').hidden = provider !== 'ali'; $('libraryAccountCookie').value = ''; $('libraryAccessToken').value = ''; $('libraryRefreshToken').value = ''; $('libraryClearAccount').checked = false;
+    $('libraryAccountSummary').textContent = account?.configured ? '已保存账号。留空不会覆盖已有配置。' : '尚未保存账号，可在官方页面登录后保存浏览器登录状态。';
+    $('libraryAccountMessage').textContent = '';
+  }
+  $('libraryAccounts').addEventListener('click', async () => { try { accounts = (await api('/accounts')).accounts; renderAccount(); $('libraryAccountsDialog').showModal(); } catch(error) { report(error); } });
+  $('libraryCloseAccounts').addEventListener('click', () => $('libraryAccountsDialog').close());
+  $('libraryAccountProvider').addEventListener('change', renderAccount);
+  $('libraryAccountLogin').addEventListener('click', async () => { try { await api('/accounts/login', {provider:$('libraryAccountProvider').value}); $('libraryAccountMessage').textContent = '在已打开的官方页面完成登录，再点击“保存浏览器登录状态”。'; } catch(error) { $('libraryAccountMessage').textContent = error.message; } });
+  $('libraryAccountSync').addEventListener('click', async () => { try { accounts = (await api('/accounts/sync', {provider:$('libraryAccountProvider').value})).accounts; renderAccount(); $('libraryAccountMessage').textContent = '浏览器登录状态已保存。'; } catch(error) { $('libraryAccountMessage').textContent = error.message; } });
+  $('libraryAccountForm').addEventListener('submit', async event => {
+    event.preventDefault(); const body = {provider:$('libraryAccountProvider').value};
+    if ($('libraryClearAccount').checked) Object.assign(body,{cookie:'',accessToken:'',refreshToken:''});
+    else { if($('libraryAccountCookie').value.trim())body.cookie=$('libraryAccountCookie').value.trim(); if($('libraryAccessToken').value.trim())body.accessToken=$('libraryAccessToken').value.trim(); if($('libraryRefreshToken').value.trim())body.refreshToken=$('libraryRefreshToken').value.trim(); }
+    try { accounts = (await api('/accounts',body)).accounts; renderAccount(); $('libraryAccountMessage').textContent = '账号已保存到本机。'; } catch(error) { $('libraryAccountMessage').textContent = error.message; }
+  });
+  $('librarySettingsForm').addEventListener('submit', async event => {
+    event.preventDefault(); const body = { siteKey: state.site, endpoint: $('libraryEndpoint').value.trim() }; if ($('libraryRemoveCookie').checked) body.cookie = ''; else if ($('libraryCookie').value.trim()) body.cookie = $('libraryCookie').value.trim();
+    try { await api('/site/settings', body); $('librarySettingsDialog').close(); status('设置已保存'); loadHome(); } catch(error) { $('librarySettingsStatus').textContent = error.message; }
+  });
+  $('librarySite').addEventListener('change', () => { state.site = $('librarySite').value; state.verifyUrl=''; $('librarySearch').value = ''; loadHome(); });
   $('librarySearchForm').addEventListener('submit', event => { event.preventDefault(); if (!state.site) return; state.keyword = $('librarySearch').value.trim(); state.category = ''; loadList(1); });
   $('libraryPrevious').addEventListener('click', () => loadList(state.page - 1)); $('libraryMore').addEventListener('click', () => loadList(state.page + 1));
   $('libraryCloseDetail').addEventListener('click', () => $('libraryDetail').close()); $('libraryLines').addEventListener('change', () => { state.line = Number($('libraryLines').value); renderEpisodes(); });
