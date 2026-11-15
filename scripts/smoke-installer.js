@@ -22,8 +22,8 @@ function uninstall() {
 try {
   assert.ok(release.installer && fs.existsSync(release.installer), 'Build the installer first');
   assert.equal(registered(), false, 'An installed copy with this AppId already exists; refuse to change its registration');
-  execFileSync(release.installer, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/NOICONS', '/DIR=' + installDir, '/LOG=' + path.join(sandbox, 'install.log')], { windowsHide: true, timeout: 180000 });
   installed = true;
+  execFileSync(release.installer, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/NOICONS', '/DIR=' + installDir, '/LOG=' + path.join(sandbox, 'install.log')], { windowsHide: true, timeout: 180000 });
   assert.ok(fs.existsSync(path.join(installDir, 'MobileTV.exe')));
   assert.equal(registered(), true);
   console.log('PASS: current-user installer installs into an isolated temporary directory');
@@ -44,6 +44,14 @@ try {
     const target = fs.realpathSync(sandbox);
     assert.equal(path.dirname(target).toLowerCase(), fs.realpathSync(os.tmpdir()).toLowerCase());
     assert.ok(path.basename(target).startsWith('MobileTV installer check '));
-    fs.rmSync(target, { recursive: true, force: true, maxRetries: 4, retryDelay: 200 });
+    try {
+      fs.rmSync(target, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    } catch (error) {
+      // Inno's temporary self-deleting uninstaller can briefly retain a handle.
+      // Successful program and registry removal were asserted above; retained
+      // diagnostic files must not turn that successful test into a failure.
+      if (!['EPERM', 'EBUSY', 'ENOTEMPTY'].includes(error.code)) throw error;
+      console.log('Temporary installer logs retained at ' + target);
+    }
   }
 }
