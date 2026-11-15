@@ -10,7 +10,7 @@ const text = value => String(value?.['#text'] ?? value ?? '').replace(/<[^>]*>/g
 const MAX_ITEMS = 500;
 
 function describeSite(raw, base, index) {
-  const site = { key: String(raw.key || index), name: text(raw.name || raw.key || '未命名站点'), type: Number(raw.type ?? 1), api: String(raw.api || ''), headers: cleanHeaders(raw.header || raw.headers), supported: false, reason: '' };
+  const site = { key: String(raw.key || index), name: text(raw.name || raw.key || '未命名站点'), type: Number(raw.type ?? 1), api: String(raw.api || ''), headers: cleanHeaders(raw.header || raw.headers), searchable: Number(raw.searchable ?? 1) === 1, quickSearch: Number(raw.quickSearch ?? 1) === 1, changeable: Number(raw.changeable ?? 1) === 1, supported: false, reason: '' };
   try {
     const adapter = htmlSites.describe(raw, base);
     if (adapter) return Object.assign(site, adapter);
@@ -53,7 +53,9 @@ function normalizeVideo(item, base) {
       return { name: separator >= 0 ? text(episode.slice(0, separator)) : `第 ${index + 1} 集`, id: separator >= 0 ? episode.slice(separator + 1).trim() : episode.trim() };
     }),
   })).filter(line => line.episodes.length) : [];
-  return { id: value('vod_id') || value('id'), title: value('vod_name') || value('name') || '未命名视频', picture, remarks: value('vod_remarks') || value('note'), year: value('vod_year') || value('year'), area: value('vod_area') || value('area'), actor: value('vod_actor') || value('actor'), director: value('vod_director') || value('director'), description: value('vod_content') || value('des'), category: value('type_name') || value('type'), lines };
+  const id = value('vod_id') || value('id'), title = value('vod_name') || value('name') || '未命名视频';
+  const searchTitle = value('searchTitle') || (id.startsWith('msearch:') ? title : '');
+  return { id, title, picture, remarks: value('vod_remarks') || value('note'), year: value('vod_year') || value('year'), area: value('vod_area') || value('area'), actor: value('vod_actor') || value('actor'), director: value('vod_director') || value('director'), description: value('vod_content') || value('des'), category: value('type_name') || value('type'), lines, ...(searchTitle ? { searchTitle } : {}), ...(item.schedule ? { schedule: require('./schedule').schedule(item.schedule) } : {}) };
 }
 
 function normalizeCatalog(data, base) {

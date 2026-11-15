@@ -31,6 +31,10 @@ internal static class Program
             if (!first)
             {
                 if (noWindow) return 0;
+                // Reopening a newer launcher must use its player selection even
+                // when an older tray process still owns the receiving service.
+                try { if (ReceiverContext.IsReceiverReady(port)) { ReceiverContext.OpenPlayerWindow(port); return 0; } }
+                catch { /* Ask the existing tray to reopen if direct launch fails. */ }
                 for (int i = 0; i < 20; i++)
                 {
                     if (Signal(name + ".Open")) return 0;
@@ -162,9 +166,14 @@ internal sealed class ReceiverContext : ApplicationContext
 
     private bool IsReady()
     {
+        return IsReceiverReady(new Uri(url).Port);
+    }
+
+    internal static bool IsReceiverReady(int port)
+    {
         try
         {
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url + "api/status");
+            HttpWebRequest request = (HttpWebRequest)WebRequest.Create("http://127.0.0.1:" + port + "/api/status");
             request.Proxy = null;
             request.Timeout = 400;
             request.ReadWriteTimeout = 400;
@@ -180,16 +189,30 @@ internal sealed class ReceiverContext : ApplicationContext
 
     private void OpenWindow()
     {
-        string[] candidates = {
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Google", "Chrome", "Application", "chrome.exe")
-        };
+        WriteLog("Opening player window");
+        OpenPlayerWindow(new Uri(url).Port);
+    }
+
+    internal static void OpenPlayerWindow(int port)
+    {
+        string url = "http://127.0.0.1:" + port + "/";
+        string dataDir = Environment.GetEnvironmentVariable("MOBILETV_DATA_DIR");
+        if (String.IsNullOrWhiteSpace(dataDir)) dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MobileTV", "data");
+        dataDir = Path.GetFullPath(dataDir);
+        string chrome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Google", "Chrome", "Application", "chrome.exe");
+        string chromeX86 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Google", "Chrome", "Application", "chrome.exe");
+        string chromeUser = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Google", "Chrome", "Application", "chrome.exe");
+        string edge = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application", "msedge.exe");
+        string edge64 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Microsoft", "Edge", "Application", "msedge.exe");
+        bool preferEdge = String.Equals(Environment.GetEnvironmentVariable("MOBILETV_PLAYER_BROWSER"), "edge", StringComparison.OrdinalIgnoreCase);
+        // Chrome's D3D11 HEVC path avoids the frame loss observed with Edge's
+        // platform decoder. Use an installed browser, with Edge as fallback.
+        string[] candidates = preferEdge ? new[] { edge, edge64, chrome, chromeX86, chromeUser } : new[] { chrome, chromeX86, chromeUser, edge, edge64 };
         foreach (string browser in candidates)
         {
             if (!File.Exists(browser)) continue;
-            string profile = Path.Combine(dataDir, "browser");
+            bool isChrome = String.Equals(Path.GetFileName(browser), "chrome.exe", StringComparison.OrdinalIgnoreCase);
+            string profile = Path.Combine(dataDir, isChrome ? "browser-chrome" : "browser");
             Process.Start(new ProcessStartInfo(browser, "--app=" + url + " --window-size=1280,820 --autoplay-policy=no-user-gesture-required --no-first-run --no-default-browser-check --user-data-dir=" + Quote(profile)) { UseShellExecute = false });
             return;
         }

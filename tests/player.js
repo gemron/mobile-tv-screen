@@ -2,11 +2,21 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
+const castState = require('../src/services/castState');
+
+const stoppedSession = castState.setMedia({url:'https://fixture.test/video.mp4',protocol:'Library',mediaType:'video',autoPlay:true});
+castState.syncFromPlayer({sessionId:stoppedSession.sessionId,status:'PLAYING',position:4,duration:12});
+castState.stop('Test');
+castState.syncFromPlayer({sessionId:stoppedSession.sessionId,status:'PLAYING',position:5,duration:12});
+assert.equal(castState.getSnapshot().status,'IDLE','Telemetry already in flight cannot revive playback after Stop');
+assert.equal(castState.getSnapshot().position,0);
+assert.equal(castState.getSnapshot().duration,0);
 
 // Run the actual TV script with browser boundaries stubbed. Inspect the URL
 // handed to the media engine rather than duplicating the routing implementation.
-function createPlayer({ hls = false } = {}) {
+function createPlayer({ hls = false, now = () => performance.now() } = {}) {
   const elements = new Map();
+  const intervals = [];
   const hlsSources = [];
   const hlsInstances = [];
   const sent = [];
@@ -23,10 +33,11 @@ function createPlayer({ hls = false } = {}) {
     duration: NaN,
     buffered: { length: 0 },
     loadCalls: 0,
+    playCalls: 0,
     addEventListener(event, handler) { this.listeners[event] = handler; },
     removeAttribute(name) { delete this[name]; },
     load() { this.loadCalls++; this.currentTime = 0; this.duration = NaN; this.error = null; },
-    play() { this.paused = false; return Promise.resolve(); },
+    play() { this.playCalls++; this.paused = false; return Promise.resolve(); },
     pause() { this.paused = true; },
     focus() {},
   });
@@ -64,8 +75,8 @@ function createPlayer({ hls = false } = {}) {
     location: new URL('http://127.0.0.1:8080/'),
     URL,
     WebSocket: FakeWebSocket,
-    performance,
-    setInterval() {},
+    performance: { now },
+    setInterval(fn, ms) { intervals.push({ fn, ms }); },
     setTimeout(fn, ms) { const id = ++nextTimer; timers.set(id, { fn, ms }); return id; },
     clearTimeout(id) { timers.delete(id); },
     fetch: () => new Promise(() => {}),
@@ -76,8 +87,10 @@ function createPlayer({ hls = false } = {}) {
     hlsSources,
     hlsInstances,
     sent,
-    runTimers(ms) { for (const [id, timer] of timers) if (timer.ms === ms) { timers.delete(id); timer.fn(); } },
+    runInterval(ms) { for (const interval of intervals) if (interval.ms === ms) interval.fn(); },
+    runTimers(ms) { for (const [id, timer] of [...timers]) if (timer.ms === ms) { timers.delete(id); timer.fn(); } },
     seek(position) { socket.onmessage({ data: JSON.stringify({ type: 'command', data: { type: 'seek', position } }) }); },
+    progress(data) { socket.onmessage({ data: JSON.stringify({ type: 'progress', data }) }); },
     get fullscreenCalls() { return fullscreenCalls; },
     press(key, options = {}) {
       const event = { key, target: {}, prevented: false, preventDefault() { this.prevented = true; }, ...options };
@@ -95,6 +108,90 @@ function createPlayer({ hls = false } = {}) {
 }
 
 const phonePlaylist = 'http://192.168.1.50:10264/proxy/vod.m3u8?play_id=53&clip_id=1';
+const originalPlayer = createPlayer();
+const originalUrl = '/api/proxy?headerContext=private&url=' + encodeURIComponent('https://dl-pc-test.drive.quark.cn/original.mp4');
+const originalVideo = originalPlayer.cast(originalUrl);
+assert.equal(originalVideo.playCalls, 0, 'original files build a reserve before autoplay');
+originalVideo.duration = 120;
+originalVideo.buffered = { length: 1, start: () => 0, end: () => 12 };
+originalPlayer.runTimers(200);
+assert.equal(originalVideo.playCalls, 1, 'original playback starts once the short reserve is available');
+const bufferedRemux = createPlayer();
+const bufferedRemuxVideo = bufferedRemux.cast(originalUrl, 'transcode', 'video', { duration: 7380 });
+assert.equal(bufferedRemuxVideo.playCalls, 0, 'protected originals also build a reserve when remuxing');
+bufferedRemuxVideo.readyState = 2; bufferedRemuxVideo.videoWidth = 3840;
+bufferedRemuxVideo.duration = 1;
+bufferedRemuxVideo.buffered = { length: 1, start: () => 0.167, end: () => 1 };
+bufferedRemux.runTimers(200);
+assert.equal(bufferedRemuxVideo.playCalls, 0, 'a growing fragmented MP4 duration must not be mistaken for the end of the full movie');
+bufferedRemuxVideo.buffered = { length: 1, start: () => 0.167, end: () => 3 };
+bufferedRemux.runTimers(200);
+assert.equal(bufferedRemuxVideo.playCalls, 1, 'a small initial timestamp offset does not block a ready remux buffer');
+const matroskaPlayer = createPlayer();
+const matroskaVideo = matroskaPlayer.cast(originalUrl, 'auto', 'video', { metadata: { mimeType: 'video/mp4' } });
+matroskaVideo.readyState = 2; matroskaVideo.videoWidth = 3840; matroskaVideo.videoHeight = 1600; matroskaVideo.duration = 7380;
+matroskaPlayer.runTimers(200);
+assert.equal(matroskaVideo.playCalls, 1, 'a decoded first frame can start even when the browser exposes no buffered time range before play');
+let bufferClock = 0;
+const metadataPlayer = createPlayer({ now: () => bufferClock });
+const metadataVideo = metadataPlayer.cast(originalUrl);
+metadataVideo.readyState = 1; metadataVideo.duration = 7380;
+metadataPlayer.runTimers(200);
+assert.equal(metadataVideo.playCalls, 0);
+bufferClock = 12001; metadataPlayer.runTimers(200);
+assert.equal(metadataVideo.playCalls, 1, 'metadata starts the bounded prebuffer deadline even without buffered ranges');
+const missingMkvVideo = createPlayer();
+const audioOnlyMkv = missingMkvVideo.cast(originalUrl, 'auto', 'video', { metadata: { mimeType: 'video/x-matroska' } });
+audioOnlyMkv.videoWidth = 0; audioOnlyMkv.duration = 7380; audioOnlyMkv.listeners.loadedmetadata();
+const compatibleMkv = new URL(audioOnlyMkv.src, 'http://127.0.0.1:8080');
+assert.equal(compatibleMkv.pathname, '/api/transcode', 'an MKV with only its audio accepted is remuxed instead of reporting video playback');
+const protectedInput = new URL(compatibleMkv.searchParams.get('url'));
+assert.equal(protectedInput.pathname, '/api/proxy');
+assert.equal(protectedInput.searchParams.get('headerContext'), 'private', 'MKV remux retains the protected parallel input proxy');
+audioOnlyMkv.duration = Infinity; audioOnlyMkv.listeners.loadedmetadata();
+assert.equal(missingMkvVideo.elements.get('seekSlider').max, 7380, 'remux retains the original duration for seeking');
+assert.equal(audioOnlyMkv.paused, true, 'an unsupported video track cannot silently continue as audio-only playback');
+assert.match(missingMkvVideo.elements.get('bufferingPill').textContent, /无法解码/);
+const clockMkv = createPlayer();
+const clockVideo = clockMkv.cast(originalUrl, 'auto', 'video', { metadata: { mimeType: 'video/x-matroska' } });
+clockVideo.videoWidth = 3840; clockVideo.videoHeight = 1608; clockVideo.duration = 7380; clockVideo.listeners.loadedmetadata();
+const clockUrl = new URL(clockVideo.src, 'http://127.0.0.1:8080');
+assert.equal(clockUrl.pathname, '/api/transcode', 'MKV uses compatible packaging even when native HEVC video metadata is available');
+assert.equal(clockUrl.searchParams.get('reencode'), null, '4K video is copied without scaling or re-encoding');
+for (const [startPosition, startPositionUnit, expected] of [[133, 'seconds', 133], [0.5, 'auto', 3690]]) {
+  const resumedMkv = createPlayer();
+  const resumedVideo = resumedMkv.cast(originalUrl, 'auto', 'video', { duration: 7380, startPosition, startPositionUnit, metadata: { mimeType: 'video/x-matroska' } });
+  resumedVideo.videoWidth = 3840; resumedVideo.duration = 7380; resumedVideo.listeners.loadedmetadata();
+  const resumedUrl = new URL(resumedVideo.src, 'http://127.0.0.1:8080');
+  assert.equal(Number(resumedUrl.searchParams.get('start')), expected, 'automatic MKV remux preserves the requested resume position before native seeking');
+  resumedVideo.duration = Infinity; resumedVideo.currentTime = 2; resumedVideo.listeners.loadedmetadata();
+  resumedVideo.listeners.playing();
+  assert.equal(resumedMkv.sent.filter(message => message.type === 'player-telemetry').at(-1).data.position, expected + 2);
+}
+const joinedMkv = createPlayer();
+const joinedVideo = joinedMkv.cast(originalUrl, 'transcode', 'video', { duration: 7380, position: 519, metadata: { mimeType: 'video/x-matroska' } });
+assert.equal(new URL(joinedVideo.src, 'http://127.0.0.1:8080').searchParams.get('start'), '519', 'a newly opened player resumes the current session rather than replaying its original start position');
+let fpsClock = 0;
+const fpsPlayer = createPlayer({ now: () => fpsClock });
+const fpsVideo = fpsPlayer.cast('/fixture.mp4');
+fpsVideo.getVideoPlaybackQuality = () => ({ totalVideoFrames: 24, droppedVideoFrames: 5 });
+fpsClock = 1000; fpsPlayer.runInterval(1000);
+assert.match(fpsPlayer.elements.get('metricPerf').textContent, /FPS: 19 \| 丢帧:21%/, 'FPS counts presented frames rather than including dropped frames');
+fpsVideo.readyState = 4; fpsVideo.videoWidth = 3840; fpsVideo.videoHeight = 1608; fpsVideo.listeners.playing();
+const resolutionTelemetry = fpsPlayer.sent.filter(message => message.type === 'player-telemetry').at(-1).data;
+assert.equal(resolutionTelemetry.videoWidth, 3840); assert.equal(resolutionTelemetry.videoHeight, 1608);
+fpsPlayer.progress({ sessionId: 1, originalBuffer: { active: true, profile: '4K', bytes: 20 * 1048576, maxBytes: 256 * 1048576, targetSeconds: 180 } });
+assert.match(fpsPlayer.elements.get('metricBuffer').textContent, /4K.*20 \/ 256 MB/);
+assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, false);
+fpsPlayer.progress({ sessionId: 2, originalBuffer: { active: false } });
+assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, false, 'stale buffer telemetry cannot hide the active session');
+fpsPlayer.cast('', 'auto', 'video', { status: 'IDLE' });
+assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, true);
+const cancelledOriginal = createPlayer();
+const stoppedOriginal = cancelledOriginal.cast(originalUrl);
+cancelledOriginal.cast('', 'auto', 'video', { status: 'IDLE' });
+cancelledOriginal.runTimers(200);
+assert.equal(stoppedOriginal.playCalls, 0, 'a cancelled buffering task cannot restart stopped playback');
 const hlsPlayer = createPlayer({ hls: true });
 hlsPlayer.cast(phonePlaylist);
 assert.strictEqual(hlsPlayer.hlsSources[0], `/api/proxy?url=${encodeURIComponent(phonePlaylist)}`,
@@ -232,3 +329,23 @@ const remuxOnly = createPlayer({ hls: true });
 assert.match(remuxOnly.cast(phonePlaylist, 'transcode').src, /^\/api\/transcode\?/);
 assert.equal(remuxOnly.hlsSources.length, 0);
 console.log('PASS: bounded HLS recovery, live/VOD buffering, stable fallback, remux routing and absolute seek position');
+const prepared=createPlayer();const remuxUrl='/api/transcode?url='+encodeURIComponent('https://fixture.test/video.m4s')+'&audioUrl='+encodeURIComponent('https://fixture.test/audio.m4s')+'&headerContext=fixture';
+const preparedVideo=prepared.cast(remuxUrl,'auto','video',{duration:600,startPosition:120,startPositionUnit:'seconds'});assert.ok(preparedVideo.src.startsWith('/api/transcode?url=https%3A%2F%2Ffixture.test%2Fvideo.m4s'));assert.ok(preparedVideo.src.includes('headerContext=fixture'));assert.match(preparedVideo.src,/start=120/);
+preparedVideo.duration=5;preparedVideo.currentTime=2;preparedVideo.listeners.playing();const preparedTelemetry=prepared.sent.filter(message=>message.type==='player-telemetry').at(-1).data;assert.equal(preparedTelemetry.position,122);assert.equal(preparedTelemetry.duration,600);prepared.seek(300);assert.match(preparedVideo.src,/start=300/);assert.ok(!preparedVideo.src.includes(encodeURIComponent('/api/transcode')),'Prepared DASH remux URLs are never wrapped again');
+console.log('PASS: prepared DASH remux preserves original duration, absolute resume/seek and credential context');
+const timeline = createPlayer(), timelineVideo = timeline.cast('http://example.test/movie.mp4');
+timelineVideo.duration = 100; timelineVideo.currentTime = 25;
+timelineVideo.buffered = { length: 2, start: index => [0, 70][index], end: index => [40, 80][index] };
+timelineVideo.listeners.progress();
+assert.equal(timeline.elements.get('seekPlayed').style.width, '25%');
+assert.ok(timeline.elements.get('seekBuffered').style.background.includes('#a2b7bc 40%'));
+assert.ok(timeline.elements.get('seekBuffered').style.background.includes('transparent 70%'));
+assert.match(timeline.elements.get('seekTrack').title, /15 秒/);
+preparedVideo.duration = 300; preparedVideo.currentTime = 5;
+preparedVideo.buffered = { length: 1, start: () => 0, end: () => 30 };
+preparedVideo.listeners.progress();
+assert.ok(prepared.elements.get('seekBuffered').style.background.includes('transparent 50%'), 'Remux buffered ranges include the absolute seek offset');
+assert.ok(prepared.elements.get('seekBuffered').style.background.includes('#a2b7bc 55%'));
+timeline.cast('', 'auto', 'video', { status: 'IDLE' });
+assert.equal(timeline.elements.get('seekBuffered').style.background, 'none');
+console.log('PASS: seek bar displays disjoint playable buffer ranges, remux offsets and clears old media');

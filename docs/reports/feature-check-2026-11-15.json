@@ -1,0 +1,63 @@
+{
+  "checkedDate": "2026-11-15",
+  "scope": "Phone UI observation plus desktop source review, local protocol fixtures and real Edge checks. Sample results do not certify every source or account.",
+  "reference": {
+    "device": "Xiaomi 15S Pro",
+    "androidVersion": 17,
+    "package": "com.fongmi.android.tv",
+    "version": "5.8.8",
+    "targetSdk": 37,
+    "publicReferenceCommit": "097917c1c5eb6c94a14b2ede3f371a681dbb751f"
+  },
+  "subscription": {
+    "entries": 49,
+    "httpAndHttpsIdentical": true,
+    "sha256": "c37c80cbd2364a72ac56b3ae3f510b6b646b012e594caf116caae8efbc068f18"
+  },
+  "phone": {
+    "discoveryCategoriesObserved": 8,
+    "discoveryCrossSourceSearchObserved": true,
+    "woggSampleTitle": "后会友期",
+    "woggOriginalTrack": { "width": 3840, "height": 2160, "fps": 25, "codec": "H.264", "framesObserved": true },
+    "woggSmartTrack": { "width": 480, "height": 270, "codec": "H.264", "framesObserved": true },
+    "woggOriginalUsesPhoneLocalProxy": true,
+    "thirdWoggLineRequestsBaiduQrAuthorization": true,
+    "newCloudAuthorizationCompleted": false,
+    "liveChannelSwitchObserved": ["CCTV6", "CCTV5"],
+    "liveProgrammeLabelObserved": true,
+    "newPhoneToDesktopCastingTestCompleted": false
+  },
+  "desktopLiveChecks": {
+    "discoveryCategoriesReturningMetadata": 8,
+    "additionalRankCollectionsReturningMetadata": 5,
+    "edgeDiscoveryCrossSourceJourney": "passed",
+    "woggSearchResultsForSameTitle": 2,
+    "quarkEpisodesForSameTitle": 19,
+    "baiduLineRemainsVisible": true,
+    "unverifiedProviderHasLoginAndRetryActions": true,
+    "woggSharePlaybackApiSample": "HTTP 404",
+    "independentBrowserFallbackWithoutSavedAccount": "requires official login or verification",
+    "quarkActualBrowserAndNodeSessionVerified": true,
+    "doubanPosterBrowserCheck": {"loaded": 20, "expected": 20, "brokenImageFallbackVerified": true, "detailVerified": true},
+    "quarkOfficialShareRequiresSave": true,
+    "quarkSingleEpisodeSave": {"explicitUserApproval": true, "requestAccepted": true, "sizeGiB": 4.67, "taskResult": "capacity limit", "completed": false},
+    "woggDesktopFramesVerified": false,
+    "privateDrivePlaybackVerified": false
+  },
+  "automatedChecks": {
+    "npmTest": "passed",
+    "discoverySearchAndAccountCacheIsolation": "passed",
+    "realEdgeVodLiveQualityWebParserAndIncrementalSearch": "passed",
+    "realEdgeSourceBrowserHeadersStorageLogoutAndFileSelection": "passed",
+    "realEdgeEncryptedHlsAdFiltering": "passed",
+    "realEdgeBufferingAndRemuxSeeking": "passed",
+    "simulatedDlnaTvboxAirplayProtocols": "passed"
+  },
+  "remaining": [
+    "Private Android plugin proxy behavior is not fully ported to the standalone desktop.",
+    "Quark desktop login is verified, but the approved sample save was blocked by insufficient cloud storage; actual frames remain unverified. Other providers' real accounts remain unverified.",
+    "EPG/replay, full subtitles/audio tracks/danmaku, viewing history/favorites and some private/native parsers are incomplete.",
+    "Apple-device AirPlay compatibility has not been physically tested."
+  ],
+  "delivery": { "localOnly": true, "packagingRequested": true, "pushed": false, "published": false }
+}

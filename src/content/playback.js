@@ -10,9 +10,9 @@ function variants(value) {
     for (let i = 0; i + 1 < Math.min(value.length, 64); i += 2) rows.push({ name: value[i], url: value[i + 1] });
   } else if (value && typeof value === 'object') {
     position = Math.max(0, Math.floor(Number(value.position) || 0));
-    rows = (Array.isArray(value.values) ? value.values : []).slice(0, 32).map(v => ({ name: v.n, url: v.v }));
+    rows = (Array.isArray(value.values) ? value.values : []).slice(0, 32).map(v => ({ name: v.n, url: v.v, type: v.type,header:v.header }));
   }
-  return { position, values: rows.filter(v => typeof v.url === 'string' && v.url.trim() && v.url.length <= 32768).map((v, i) => ({ name: String(v.name || `画质 ${i + 1}`).slice(0, 100), url: v.url.trim() })) };
+  return { position, values: rows.filter(v => typeof v.url === 'string' && v.url.trim() && v.url.length <= 32768).map((v, i) => ({ name: String(v.name || `画质 ${i + 1}`).slice(0, 100), url: v.url.trim(), ...(v.type?{type:String(v.type).slice(0,100)}:{}),...(v.header?{header:cleanHeaders(v.header)}:{}) })) };
 }
 function mimeType(url, hint = '') {
   const type = String(hint).toLowerCase();
@@ -55,7 +55,11 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
   let result = raw && typeof raw === 'object' ? raw : {};
   if (result.url == null && result.data && typeof result.data === 'object') result = { ...result, ...result.data };
   if (result.drm) throw new Error('该资源声明了 DRM，当前播放器尚未支持这种授权播放方式');
-  if (result.playlistContext) throw new Error('该线路的加密清单仍需专用适配，请暂时选择其他线路或站点');
+  if (result.playlistContext) {
+    if (result.playlistContext.kind !== 'hmys') throw new Error('该线路的清单格式尚未支持');
+    require('../services/hmysTransport').normalize(result.playlistContext);
+    if (parserKey) throw new Error('海绵线路请使用自动 / 直链播放');
+  }
   let choices = variants(result.url);
   const requested = quality == null ? null : Number(quality);
   if(requested!=null&&(!Number.isInteger(requested)||requested<0||requested>31))throw Object.assign(new Error('画质参数无效'),{status:400});
@@ -66,7 +70,8 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
   if (result.localUrl && /^\/api\/library\/torrent\/[a-f0-9]+\/\d+\/stream\.[a-z0-9]+$/.test(url)) return { url, headers: {}, mimeType: '', qualities: [], quality: 0 };
   const defaults = result.inheritHeaders === false ? {} : { ...site.headers };
   if (!sameOrigin(webUrl(url, site.api), site.api)) { delete defaults.cookie; delete defaults.authorization; }
-  let headers = requestHeaders(result, defaults), credentialOrigin = result.credentialOrigin || '';
+  const selectedOrigin=new URL(webUrl(url,site.api)).origin;
+  let headers = {...requestHeaders(result, defaults),...cleanHeaders(choices.values[selected].header)}, credentialOrigin = Array.isArray(result.credentialOrigins)&&result.credentialOrigins.includes(selectedOrigin)?selectedOrigin:result.credentialOrigin||'';
   let parser = parserKey ? parsers.find(p => p.key === parserKey) : null;
   if (parserKey && !parser) throw Object.assign(new Error('所选解析器不存在'), { status: 400 });
   const prefix = String(result.playUrl || (!site.adapter && site.playUrl) || '');
@@ -79,7 +84,7 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
     parser = parsers.find(p => p.supported !== false && [0, 1].includes(p.type) && (!p.flags?.length || p.flags.includes(result.flag || flag)));
     if (!parser && Number(result.jx) === 1) throw new Error('该资源要求解析，但未配置可用的网页或 JSON 解析器');
   }
-  let hint = result.format || result.type || '', needsWeb = Number(result.parse || result.jx || 0) === 1;
+  let hint = choices.values[selected].type || result.format || result.type || '', needsWeb = Number(result.parse || result.jx || 0) === 1;
   if (parser) {
     if (![0, 1].includes(Number(parser.type))) throw Object.assign(new Error([2,3].includes(Number(parser.type))?'此解析器依赖 Android 扩展加载器，当前仅支持网页与 JSON 解析器':'此解析器类型尚未实现，当前支持网页与 JSON 解析器'), { status: 422 });
     const address = webUrl(parserAddress(parser.url, url), site.api);
@@ -113,11 +118,12 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
     }
   }
   url = webUrl(url, site.api);
+  if (result.playlistContext && new URL(url).origin !== selectedOrigin) throw new Error('专用播放线路地址已变化，请使用自动播放重试');
   if (!sameOrigin(url, site.api) && credentialOrigin !== new URL(url).origin) { delete headers.cookie; delete headers.authorization; }
   let mime = mimeType(url, hint);
   if (!mime && !/\.(mp4|webm|m4v|mp3|m4a|aac|wav|ogg)(?:[?#]|$)/i.test(url)) mime = await sniffType(url, headers, signal);
   if (mime === 'application/dash+xml') throw new Error('该线路返回 DASH 清单；当前支持分离音视频地址转封装，请选择 HLS 或 MP4 线路');
   if(requested!=null&&choices.values.length===1&&requested!==0)throw Object.assign(new Error('该资源只返回了一个画质'),{status:400});
-  return { url, headers, mimeType: mime, audioUrl: result.audioUrl ? webUrl(result.audioUrl, site.api) : '', isLive: Boolean(result.isLive), qualities: choices.values.map(v => v.name), quality: selected };
+  return { url, headers, mimeType: mime, audioUrl: result.audioUrl ? webUrl(result.audioUrl, site.api) : '', isLive: Boolean(result.isLive), qualities: choices.values.map(v => v.name), quality: selected, ...(result.playlistContext ? { playlistContext: result.playlistContext } : {}) };
 }
 module.exports = { resolvePlayback, variants, mimeType, parserAddress, requestHeaders, sniffType };

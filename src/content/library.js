@@ -14,14 +14,25 @@ const { RuntimeData } = require('./runtime-data');
 const { Accounts } = require('./accounts');
 const { Cloud } = require('./cloud');
 const { Torrents } = require('./torrents');
+const { Collection } = require('./collection');
 
 const idFor = value => createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
 const failure = (message, status = 400) => Object.assign(new Error(message), { status });
+function waitForPlayback(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => signal.removeEventListener('abort', cancel);
+    const cancel = () => { cleanup(); reject(signal.reason || new DOMException('播放已取消', 'AbortError')); };
+    Promise.resolve(promise).then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    if (signal.aborted) cancel(); else signal.addEventListener('abort', cancel, { once: true });
+  });
+}
 
 class Library {
-  constructor({ dataDir = DATA_DIR, fetchResource = resource, adFilter } = {}) {
+  constructor({ dataDir = DATA_DIR, fetchResource = resource, adFilter, playTimeoutMs = 40000 } = {}) {
     this.adFilter = adFilter;
+    this.playTimeoutMs = Math.max(25, Math.min(120000, Number(playTimeoutMs) || 40000));
     this.file = path.join(dataDir, 'library-config.json');
+    this.sources = []; this.sourceId = ''; this.collection = new Collection(dataDir);
     this.overridesFile = path.join(dataDir, 'library-overrides.json'); this.overrides = {};
     try { this.overrides = JSON.parse(fs.readFileSync(this.overridesFile, 'utf8')); } catch {}
     this.browser = new SourceBrowser(dataDir);
@@ -30,15 +41,27 @@ class Library {
     this.accounts.validator = (provider,credentials,signal) => this.cloud.checkAccount(provider,credentials,signal);
     this.torrents = new Torrents(dataDir);
     this.onCastChange = state => {
+      this.trackProgress(state);
+      if (['IDLE', 'STOPPED', 'PAUSED'].includes(state.status)) this.collection.flush();
       if (this.torrents.active?.selected >= 0 && (state.protocol !== 'Library' || !state.url.startsWith('/api/library/torrent/') || ['IDLE', 'STOPPED'].includes(state.status))) this.torrents.stop().catch(() => {});
     };
     castState.on('stateChange', this.onCastChange);
+    this.onProgress = state => this.trackProgress(state);
+    castState.on('progress', this.onProgress);
     this.fetchResource = fetchResource;
     this.config = null; this.sites = []; this.liveSources = []; this.parsers = []; this.repositories = [];
-    this.cache = new Map(); this.cacheBytes = 0; this.generation = 0; this.playback = null; this.importController = null; this.playController = null;
+    this.cache = new Map(); this.cacheBytes = 0; this.generation = 0; this.cloudGeneration = 0; this.playback = null; this.importController = null; this.playController = null;
     try {
       const stored = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-      if (stored.version === 1 && stored.document && stored.url) this.apply(stored.document, stored.url, stored.importedAt);
+      if (stored.version === 2 && Array.isArray(stored.sources)) {
+        this.sources = stored.sources.filter(item => item && item.id && item.url && item.document).slice(0, 30);
+        const selected = this.sources.find(item => item.id === stored.activeId) || this.sources[0];
+        if (selected) { this.sourceId = selected.id; this.apply(selected.document, selected.baseUrl || selected.url, selected.importedAt); }
+      } else if (stored.version === 1 && stored.document && stored.url) {
+        this.sourceId = idFor(stored.url);
+        this.sources = [{ id: this.sourceId, url: stored.url, baseUrl: stored.url, name: new URL(stored.url).hostname, document: stored.document, importedAt: stored.importedAt }];
+        this.apply(stored.document, stored.url, stored.importedAt);
+      }
     } catch { /* A missing or invalid saved source does not stop casting. */ }
   }
 
@@ -82,7 +105,37 @@ class Library {
   }
 
   summary() {
-    return { url: this.config?.url || '', importedAt: this.config?.importedAt || null, sites: this.sites.map(({ key, name, type, supported, reason, implementation }) => ({ key, name, type, supported, reason, implementation })), lives: this.liveSources.map(({ key, name, supported, reason }) => ({ key, name, supported, reason })), parsers: this.parsers.map(({ key, name, type, supported, reason }) => ({ key, name, type, supported, reason })), repositories: this.repositories, implementation: 'nodejs' };
+    return { sourceId: this.sourceId, sources: this.sources.map(({ id, url, name, importedAt }) => ({ id, url, name, importedAt })), url: this.config?.url || '', importedAt: this.config?.importedAt || null, sites: this.sites.map(({ key, name, type, supported, reason, implementation, searchable, discovery }) => ({ key, name, type, supported, reason, implementation, searchable, discovery: Boolean(discovery) })), lives: this.liveSources.map(({ key, name, supported, reason }) => ({ key, name, supported, reason })), parsers: this.parsers.map(({ key, name, type, supported, reason }) => ({ key, name, type, supported, reason })), repositories: this.repositories, implementation: 'nodejs' };
+  }
+
+  persistSources() {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    fs.writeFileSync(this.file + '.tmp', JSON.stringify({ version: 2, activeId: this.sourceId, sources: this.sources }), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(this.file + '.tmp', this.file);
+  }
+  selectSource(id) {
+    const source = this.sources.find(item => item.id === String(id));
+    if (!source) throw failure('保存的地址不存在，请重新添加', 404);
+    this.importController?.abort();
+    if (this.sourceId !== source.id) {
+      this.trackProgress(castState.getSnapshot()); this.collection.flush();
+      if (this.playbackSummary()) castState.stop('Library');
+      this.playback = null;
+      this.apply(source.document, source.baseUrl || source.url, source.importedAt); this.sourceId = source.id;
+      this.persistSources();
+    }
+    return this.summary();
+  }
+  renameSource(id, name) {
+    const source = this.sources.find(item => item.id === String(id));
+    if (!source) throw failure('保存的地址不存在', 404);
+    name = String(name || '').trim(); if (!name || name.length > 80) throw failure('请输入 1–80 字的地址名称');
+    source.name = name; this.persistSources(); return this.summary();
+  }
+  removeSource(id) {
+    if (!this.sources.some(item => item.id === String(id))) throw failure('保存的地址不存在', 404);
+    if (this.sourceId === id) throw failure('请先切换到其他地址，再移除此地址');
+    this.sources = this.sources.filter(item => item.id !== id); this.persistSources(); return this.summary();
   }
 
   siteSettings(key) {
@@ -105,7 +158,7 @@ class Library {
     return this.siteSettings(siteKey);
   }
 
-  async import(address) {
+  async import(address, name) {
     const url = webUrl(address);
     this.importController?.abort();
     const controller = this.importController = new AbortController();
@@ -121,10 +174,13 @@ class Library {
     const staging = Object.create(Library.prototype);
     staging.cache = new Map(); staging.cacheBytes = 0; staging.generation = 0;
     staging.apply(document, response.url || url);
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const importedAt = Date.now(), temporary = this.file + '.tmp';
-    fs.writeFileSync(temporary, JSON.stringify({ version: 1, url: response.url || url, importedAt, document }), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(temporary, this.file);
+    const existing = this.sources.find(item => item.url === url || item.baseUrl === url), id = existing?.id || idFor(url), importedAt = Date.now();
+    if (!existing && this.sources.length >= 30) throw failure('最多保存 30 个地址，请先移除不用的地址');
+    this.trackProgress(castState.getSnapshot()); this.collection.flush();
+    if (this.playbackSummary()) castState.stop('Library');
+    const source = { id, url, baseUrl: response.url || url, importedAt, document, name: String(name || existing?.name || new URL(url).hostname).trim().slice(0, 80) };
+    this.sources = [...this.sources.filter(item => item.id !== id), source]; this.sourceId = id;
+    this.persistSources();
     this.apply(document, response.url || url, importedAt);
     this.playback = null;
     return this.summary();
@@ -137,12 +193,19 @@ class Library {
     return site;
   }
 
-  async cached(key, ttl, load) {
+  invalidateCloudCache() {
+    this.cloudGeneration++;
+    this.cloudPlayController?.abort();
+    for(const [key,value] of this.cache)if(value.cloud){this.cache.delete(key);this.cacheBytes-=value.bytes;}
+  }
+
+  async cached(key, ttl, load, cloud = false) {
     const existing = this.cache.get(key);
     if (existing && existing.expires > Date.now()) { this.cache.delete(key); this.cache.set(key, existing); return existing.data; }
     if (existing) { this.cacheBytes -= existing.bytes; this.cache.delete(key); }
-    const generation = this.generation, data = await load();
+    const generation = this.generation, cloudGeneration = this.cloudGeneration, data = await load();
     if (generation !== this.generation) throw failure('配置已切换，请重新选择', 409);
+    if (cloud && cloudGeneration !== this.cloudGeneration) throw failure('网盘账号状态已变化，请重新读取', 409);
     const bytes = Buffer.byteLength(JSON.stringify(data));
     if (bytes <= 4 * 1024 * 1024) {
       const replaced = this.cache.get(key);
@@ -150,31 +213,18 @@ class Library {
       while ((this.cacheBytes + bytes > 16 * 1024 * 1024 || this.cache.size >= 32) && this.cache.size) {
         const oldest = this.cache.keys().next().value; this.cacheBytes -= this.cache.get(oldest).bytes; this.cache.delete(oldest);
       }
-      this.cache.set(key, { data, bytes, expires: Date.now() + ttl }); this.cacheBytes += bytes;
+      this.cache.set(key, { data, bytes, expires: Date.now() + ttl, cloud }); this.cacheBytes += bytes;
     }
     return data;
   }
 
-  home(key) { const site = this.site(key); return this.cached('home:' + key, 120000, () => catalog.home(site)); }
-  list(key, options) { const site = this.site(key); return this.cached('list:' + key + JSON.stringify(options), 60000, () => catalog.category(site, options)); }
-  detail(key, id) { const site = this.site(key); return this.cached('detail:' + key + ':' + id, 300000, () => catalog.detail(site, id)); }
+  home(key) { const site = this.site(key); return this.cached('home:' + key, 120000, () => catalog.home(site), /^cloud-/.test(site.adapter || '')); }
+  list(key, options = {}) { const site = this.site(key); return this.cached('list:' + key + JSON.stringify(options), 60000, async () => {const data=await catalog.category(site, options);return options.keyword?{...data,list:require('./search-match').rankResults(data.list,options.keyword)}:data;}, /^cloud-/.test(site.adapter || '')); }
+  detail(key, id, refresh = false, signal) { const site = this.site(key), cacheKey='detail:' + key + ':' + id,cloud=/^cloud-/.test(site.adapter || '');if(refresh){if(cloud)this.invalidateCloudCache();const entry=this.cache.get(cacheKey);if(entry){this.cacheBytes-=entry.bytes;this.cache.delete(cacheKey);}}return this.cached(cacheKey, 300000, () => catalog.detail(site, id, signal), cloud); }
 
-  async searchAll(keyword) {
-    keyword = String(keyword || '').trim().slice(0, 200);
-    if (!keyword) throw failure('请输入片名');
-    const sources = this.sites.filter(site => site.supported && !/^(cloud-|sports-|discovery-|yueting)/.test(site.adapter || '') && !['huya','douyu','alllive','xiaobei','extra-Kanqiu','extra-Music','extra-XPath','extra-YGP','extra-SixV'].includes(site.adapter));
-    const deadline = AbortSignal.timeout(15000), results = [], errors = []; let cursor = 0;
-    const worker = async () => {
-      while (cursor < sources.length && !deadline.aborted) {
-        const site = sources[cursor++];
-        try {
-          const data = await catalog.category(site, { keyword, page: 1 }, AbortSignal.any([deadline, AbortSignal.timeout(6000)]));
-          for (const item of data.list.slice(0, 20)) results.push({ ...item, siteKey: site.key, sourceName: site.name });
-        } catch (error) { errors.push({ siteKey: site.key, name: site.name, error: error.message }); }
-      }
-    };
-    await Promise.all([worker(), worker(), worker()]);
-    return { list: results.slice(0, 300), errors, page: 1, pageCount: 1, notice: results.length ? `在导入的源中找到 ${results.length} 个结果，请核对片名和年份后选择。` : '本次未找到片源，可切换站点单独搜索或稍后重试。' };
+  searchAll(keyword, options = {}) {
+    const generation = this.generation;
+    return require('./search').searchSources(this.sites, keyword, { ...options, isCurrent: () => generation === this.generation });
   }
 
   async channels(key, refresh = false) {
@@ -195,21 +245,76 @@ class Library {
     const current = castState.getSnapshot();
     if (!this.playback || this.playback.sessionId !== current.sessionId || ['IDLE', 'STOPPED'].includes(current.status)) return null;
     const { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey, qualities, quality } = this.playback;
-    return { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey, qualities, quality, sessionId: this.playback.sessionId };
+    return { kind, sourceId: this.playback.sourceId, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey, qualities, quality, sessionId: this.playback.sessionId };
   }
 
-  async play({ siteKey, vodId, line = 0, index = 0, parserKey = '', quality, resumePosition = 0, sessionId }) {
+  trackProgress(state) {
+    if (this.playback?.historyId && state.sessionId === this.playback.sessionId && !['IDLE', 'STOPPED'].includes(state.status)) this.collection.progress(this.playback.historyId, state);
+  }
+  async favorite(selection) {
+    const sourceId = this.sourceId;
+    let item;
+    if (selection.kind === 'live') {
+      const channel = (await this.channels(selection.sourceKey)).find(item => item.id === selection.channelId);
+      if (!channel) throw failure('频道不存在', 404);
+      item = { kind: 'live', sourceId, sourceKey: selection.sourceKey, channelId: channel.id, title: channel.name, picture: channel.logo, group: channel.group };
+    } else {
+      const video = await this.detail(selection.siteKey, selection.vodId);
+      item = { kind: 'vod', sourceId, siteKey: selection.siteKey, vodId: video.id, title: video.title, picture: video.picture };
+    }
+    if (sourceId !== this.sourceId) throw failure('地址已切换，请重新收藏', 409);
+    return this.collection.favorite(item, selection.saved);
+  }
+  async resume({ id, favorite = false }) {
+    const item = this.collection.data[favorite ? 'favorites' : 'history'].find(item => item.id === id);
+    if (!item) throw failure('记录不存在', 404);
+    this.selectSource(item.sourceId);
+    if (item.kind === 'live') return this.playLive({ sourceKey: item.sourceKey, channelId: item.channelId });
+    const finished = item.duration > 0 && item.position >= item.duration - Math.min(20, item.duration * .05);
+    let line = item.line || 0, index = item.index || 0;
+    if (!favorite && item.episode) {
+      const detail = await this.detail(item.siteKey, item.vodId);
+      if (item.lineName && detail.lines[line]?.name !== item.lineName) line = detail.lines.findIndex(group => group.name === item.lineName);
+      if (line < 0) throw failure('原播放线路已变化，请重新选择剧集', 409);
+      if (detail.lines[line]?.episodes[index]?.name !== item.episode) index = detail.lines[line]?.episodes.findIndex(episode => episode.name === item.episode) ?? -1;
+      if (index < 0) throw failure('原剧集已变化，请重新选择', 409);
+    }
+    return this.play({ siteKey: item.siteKey, vodId: item.vodId, line, index, parserKey: item.parserKey || '', quality: item.quality, resumePosition: favorite || finished ? 0 : item.position || 0 });
+  }
+
+  async play({ siteKey, vodId, line = 0, index = 0, parserKey = '', quality, resumePosition = 0, sessionId, saveToDrive = false }, { signal } = {}) {
+    signal?.throwIfAborted();
     if(sessionId!=null&&Number(sessionId)!==castState.getSnapshot().sessionId)throw failure('播放已切换，本次画质选择已取消',409);
     this.playController?.abort();
-    const controller = this.playController = new AbortController(), generation = this.generation, previousSession = castState.getSnapshot().sessionId;
-    const site = this.site(siteKey), video = await this.detail(siteKey, vodId);
+    const controller = this.playController = new AbortController(), generation = this.generation, cloudGeneration = this.cloudGeneration, previousSession = castState.getSnapshot().sessionId;
+    const abort = () => controller.abort(signal.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    const timeout = setTimeout(() => controller.abort(new DOMException('片源解析超时', 'TimeoutError')), this.playTimeoutMs).unref();
+    const wait = promise => waitForPlayback(promise, controller.signal);
+    try {
+    const site = this.site(siteKey);
+    this.cloudPlayController=/^cloud-/.test(site.adapter||'')?controller:null;
+    const video = await wait(this.detail(siteKey, vodId, false, controller.signal));
     const group = video.lines[Number(line)], episode = group?.episodes[Number(index)];
     if (!episode) throw failure('所选播放线路或剧集不存在');
-    const resolved = await catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal,{quality});
+    if(controller.signal.aborted||(/^cloud-/.test(site.adapter||'')&&cloudGeneration!==this.cloudGeneration))throw failure('网盘账号状态或播放选择已变化，请重新播放',409);
+    let resolved;
+    if(saveToDrive===true){
+      if(!/^cloud-/.test(site.adapter||'')||!episode.id.startsWith('cloud:'))throw failure('此线路不支持保存到网盘');
+      const media=await wait(this.cloud.saveShare(episode.id,{consent:true,signal:controller.signal}));
+      resolved=await wait(require('./playback').resolvePlayback(site,media,{parsers:this.parsers,parserKey,signal:controller.signal,flag:group.name,quality}));
+    }else resolved = await wait(catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal,{quality}));
+    if(/^cloud-/.test(site.adapter||'') && cloudGeneration!==this.cloudGeneration)throw failure('网盘账号状态已变化，请重新播放',409);
     if (controller.signal.aborted || generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
-    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true,startPosition:Math.max(0,Math.min(604800,Number(resumePosition)||0)),startPositionUnit:'seconds' });
-    this.playback = { kind: 'vod', siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, qualities:resolved.qualities,quality:resolved.quality,episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
+    this.trackProgress(castState.getSnapshot());
+    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType, resolved.playlistContext), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true,startPosition:Math.max(0,Math.min(604800,Number(resumePosition)||0)),startPositionUnit:'seconds' });
+    const entry = this.collection.record({ kind: 'vod', sourceId: this.sourceId, siteKey, vodId, title: video.title, picture: video.picture, episode: episode.name, lineName: group.name, line: Number(line), index: Number(index), parserKey, quality: resolved.quality, position: state.position, duration: 0 });
+    this.playback = { kind: 'vod', sourceId: this.sourceId, historyId: entry.id, siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, qualities:resolved.qualities,quality:resolved.quality,episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
     return { state, playback: this.playbackSummary() };
+    } catch (error) {
+      if (controller.signal.reason?.name === 'TimeoutError' || !controller.signal.aborted && (error.name === 'AbortError' || error.name === 'TimeoutError' || error.code === 'ETIMEDOUT')) throw failure('片源解析超时，请重试本集或更换线路。', 504);
+      throw error;
+    } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); }
   }
 
   async playLive({ sourceKey, channelId, line = 0 }) {
@@ -218,8 +323,10 @@ class Library {
     const channels = await this.channels(sourceKey), channel = channels.find(item => item.id === channelId), selected = channel?.urls[Number(line)];
     if (!selected) throw failure('频道或播放线路不存在');
     if (generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
+    this.trackProgress(castState.getSnapshot());
     const state = castState.setMedia({ url: mediaHeaders.mediaUrl(selected.url, selected.headers), protocol: 'Live', mediaType: 'video', metadata: { title: channel.name, artist: channel.group, artwork: channel.logo, mimeType: /^https?:/i.test(selected.url) ? catalog.mediaHint(selected.url) : '', isLive: true }, clientName: '电脑独立直播', autoPlay: true });
-    this.playback = { kind: 'live', title: channel.name, sourceKey, channelId, channelLine: Number(line), channels: channels.map(item => ({ id: item.id, name: item.name, lines: item.urls.length })), sessionId: state.sessionId };
+    const entry = this.collection.record({ kind: 'live', sourceId: this.sourceId, sourceKey, channelId, title: channel.name, picture: channel.logo, group: channel.group });
+    this.playback = { kind: 'live', sourceId: this.sourceId, historyId: entry.id, title: channel.name, sourceKey, channelId, channelLine: Number(line), channels: channels.map(item => ({ id: item.id, name: item.name, group: item.group, lines: item.urls.length })), sessionId: state.sessionId };
     return { state, playback: this.playbackSummary() };
   }
 
@@ -237,7 +344,7 @@ class Library {
     return this.playLive({ sourceKey: current.sourceKey, channelId: next.id });
   }
 
-  close() { castState.off('stateChange',this.onCastChange); this.importController?.abort(); this.playController?.abort(); this.cache.clear(); this.cacheBytes = 0; return Promise.allSettled([this.browser.close(),this.torrents.close()]); }
+  close() { this.trackProgress(castState.getSnapshot()); this.collection.flush(); castState.off('stateChange',this.onCastChange); castState.off('progress',this.onProgress); this.importController?.abort(); this.playController?.abort(); this.cache.clear(); this.cacheBytes = 0; return Promise.allSettled([this.browser.close(),this.torrents.close()]); }
 }
 
 module.exports = { Library };

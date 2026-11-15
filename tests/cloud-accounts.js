@@ -20,9 +20,10 @@ async function run(){
       res.setHeader('Set-Cookie','__puus=rotated; Path=/; HttpOnly');return send({code:0,data:{list:[]}});
     }
     if(url.pathname==='/api/list')return req.headers.cookie?.includes('BDUSS=valid')?send({errno:0,list:[]}):send({errno:-6});
+    if(url.pathname==='/x/web-interface/nav')return send({code:0,data:{isLogin:req.headers.cookie?.includes('SESSDATA=valid')===true}});
     res.statusCode=404;send({error:'not found'});
   });await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+server.address().port;
-  const cloud=new Cloud(accounts,browser,{endpoints:{ali:base,quark:base+'/quark/',uc:base+'/uc/',baidu:base}});accounts.validator=(provider,credentials,signal)=>cloud.checkAccount(provider,credentials,signal);
+  const cloud=new Cloud(accounts,browser,{endpoints:{ali:base,quark:base+'/quark/',uc:base+'/uc/',baidu:base,bili:base}});accounts.validator=(provider,credentials,signal)=>cloud.checkAccount(provider,credentials,signal);
   try{
     assert.throws(()=>accounts.get('constructor'),/不支持/);
     assert.equal(accounts.summary()[0].configured,false);
@@ -36,6 +37,7 @@ async function run(){
     accounts.set('ali',{accessToken:'expired-but-unexpired-clock',refreshToken:'refresh-old',expiresAt:Date.now()+3600000});const user=await cloud.request('ali','/v2/user/get',{},await cloud.authorization());assert.equal(user.user_id,'fixture-user');assert.equal(refreshCalls,2,'A rejected access token refreshes once and retries');
     accounts.set('ali',{accessToken:'',refreshToken:'invalid'});await assert.rejects(accounts.check('ali'),e=>e.status===428);assert.equal(accounts.summary().find(a=>a.provider==='ali').valid,false);
     accounts.set('baidu',{cookie:'BDUSS=valid'});await accounts.check('baidu');assert.equal(accounts.summary().find(a=>a.provider==='baidu').status,'verified');
+    accounts.set('bili',{cookie:'SESSDATA=valid'});await accounts.check('bili');assert.equal(accounts.summary().find(a=>a.provider==='bili').valid,true);accounts.set('bili',{cookie:'anonymous=1'});await assert.rejects(accounts.check('bili'),e=>e.status===428);assert.equal(accounts.summary().find(a=>a.provider==='bili').valid,false);
     const drive=await cloud.resolveDrive({provider:'baidu',fid:'/fixture.mp4'});assert.equal(drive.credentialOrigin,new URL(base).origin);assert.equal(drive.header.cookie,'BDUSS=valid');
     const playback=await require('../src/content/playback').resolvePlayback({api:'https://pan.quark.cn/',headers:{}},drive);assert.equal(playback.headers.cookie,'BDUSS=valid','The MyDrive entry retains credentials specifically scoped to a different selected provider API');
     const summary=JSON.stringify(accounts.summary());for(const value of ['session=valid','BDUSS=valid','refresh-old','access-new','rotated'])assert.ok(!summary.includes(value),'Public account summary never returns secrets');

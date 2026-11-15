@@ -1,7 +1,7 @@
 const assert = require('assert/strict');
 const http = require('http'); const crypto = require('crypto');
 const catalog = require('../src/content/catalog'); const { extract } = require('../src/content/literals');
-const { Cloud, shareAddress } = require('../src/content/cloud');
+const { Cloud, shareAddress, decode } = require('../src/content/cloud');
 const protectedApps = require('../src/content/adapters/protected-apps');
 const { hchacha, decrypt } = require('../src/content/adapters/audiobooks');
 const { crypt } = require('../src/content/adapters/sports');
@@ -48,7 +48,7 @@ async function run() {
     const mdd=site('csp_MaiDuiDuiGuard');mdd.api=base;mdd.material={get:async()=>({fields:{SN:'fixture-sign',N:'fixture-web',t0:'5.6.01'}})};assert.equal((await catalog.category(mdd,{id:'0',page:1})).list[0].id,'mdd1');
     const sports=site('csp_LiveGzGuard');sports.api=base;assert.equal((await catalog.category(sports,{id:'0-0-1'})).list[0].title,'A vs B');
     const hmys={adapter:'hmys',api:base,headers:{},deviceId:'device-fixture',material:{get:async()=>({fields:{i:'app',t0:'channel',M:'fixture',N:'salt',Gc:'1',yq:'01234567890123456789012345678901',SN:'0123456789012345'}})}};assert.equal((await protectedApps.hmysCall(hmys,'/hmys',{},undefined)).ok,true);
-    const cloud=new Cloud({cookie:async()=> 'private=cloud',get:()=>({})},null,{endpoints:{quark:base+'/cloud/'}});const share=await cloud.detail('https://pan.quark.cn/s/fixture');assert.equal(share.lines[0].name,'Season 1');assert.equal(share.lines[0].episodes[0].name,'Episode 01.mp4');const resolved=await cloud.resolve(share.lines[0].episodes[0].id);assert.equal(resolved.url,'https://cdn.example.test/1080.m3u8');assert.equal(resolved.header.cookie,undefined);
+    const cloud=new Cloud({cookie:async()=> 'private=cloud',get:()=>({})},null,{endpoints:{quark:base+'/cloud/'}});const share=await cloud.detail('https://pan.quark.cn/s/fixture');assert.equal(share.lines[0].name,'Season 1');assert.equal(share.lines[0].provider,'quark');assert.equal(share.lines[0].episodes[0].name,'Episode 01.mp4');assert.deepEqual(decode(share.lines[0].episodes[0].id).folders,['Season 1'],'Browser fallback retains the exact containing directory');const resolved=await cloud.resolve(share.lines[0].episodes[0].id);assert.equal(resolved.url.values[0].v,'https://cdn.example.test/1080.m3u8');assert.equal(resolved.url.values.length,2,'All returned cloud renditions remain selectable');assert.equal(resolved.header.cookie,undefined);
     console.log('PASS: Bili DASH/credentials, signed app forms, MDD signing, sports envelopes, private app crypto, nested cloud files/quality and literal-only rules');
   } finally {server.closeAllConnections();await new Promise(resolve=>server.close(resolve));delete global.__untrustedExecuted;}
 }

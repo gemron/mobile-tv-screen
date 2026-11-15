@@ -47,10 +47,14 @@ async function detail(site,id,signal){
   const r=await page(site,webUrl(id,site.api),signal),{$}=r,links=[];
   $('[data-clipboard-text],[data-link],a[href]').each((_,e)=>{const node=$(e),value=node.attr('data-clipboard-text')||node.attr('data-link')||node.attr('href');if(value&&/pan\.quark\.cn|drive\.uc\.cn|alipan\.com|aliyundrive\.com|pan\.baidu\.com/.test(value))links.push(value);});
   for(const m of r.text.replace(/\\\//g,'/').matchAll(/https?:\/\/(?:pan\.quark\.cn|drive\.uc\.cn|www\.(?:alipan|aliyundrive)\.com|pan\.baidu\.com)\/s\/[^\s"'<>]+/g))links.push(m[0].replace(/&amp;/g,'&'));
-  const lines=[],errors=[];
-  for(const link of [...new Set(links)].slice(0,12))try{const data=await site.cloud.detail(link,signal);lines.push(...data.lines);}catch(e){errors.push(e);}
-  if(!lines.length)throw errors[0]||new Error('该详情页没有识别到网盘分享地址');
-  return {vod_id:id,vod_name:text($('h1,.video-info-header h1').first().text())||'网盘影视',vod_pic:$('.module-item-pic img,.video-cover img,.poster img').first().attr('data-src'),vod_content:text($('.video-info-content,.description,.entry-content').first().text()),lines};
+  const lines=[],errors=[],pending=[];
+  for(const link of [...new Set(links)].slice(0,12))try{const data=await site.cloud.detail(link,signal);lines.push(...data.lines);}catch(e){errors.push(e);try{const info=shareAddress(link);pending.push({name:'分享线路',provider:info.provider,episodes:[],notice:String(e.message).replace(/https?:\/\/\S+/g,'[URL]').slice(0,240),verifyUrl:e.verifyUrl||info.url});}catch{}}
+  signal?.throwIfAborted();
+  if(!lines.length&&!pending.length)throw errors[0]||new Error('该详情页没有识别到网盘分享地址');
+  lines.push(...pending);
+  const description=$('.video-info-content,.description,.entry-content').first().clone(),expanded=description.find('.sqjj_a').first();
+  const content=expanded.length?expanded:description;content.find('.sq_jj,.zk_jj,script,style,button').remove();
+  return {vod_id:id,vod_name:text($('h1,.video-info-header h1').first().text())||'网盘影视',vod_pic:$('.module-item-pic img,.video-cover img,.poster img').first().attr('data-src'),vod_content:text(content.text()),lines};
 }
 async function resolve(site,episode,signal){if(episode.id.startsWith('torrent:'))return site.torrents.resolve(episode.id,signal);if(episode.id.startsWith('cloud:'))return site.cloud.resolve(episode.id,signal);try{return await resolvePage(site,episode.id,signal);}catch(error){if(!site.browser)throw error;return site.browser.run(webUrl(episode.id,site.api),{media:true,signal});}}
 module.exports={describe,list,detail,resolve,flattened};

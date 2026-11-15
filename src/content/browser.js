@@ -11,11 +11,47 @@ const { webUrl, cleanHeaders } = require('./format');
 class SourceBrowser {
   constructor(dataDir) { this.profile = path.resolve(dataDir, 'source-browser'); this.pending = new Map(); this.sequence = 0; this.queue = Promise.resolve(); this.closed = false; }
   async start(visible = false) {
+    if(this.closed)throw new Error('站点浏览器已关闭');
+    if(this.starting)await this.starting;
     if (this.socket?.readyState === WebSocket.OPEN && (!visible || this.visible)) return;
-    if (this.starting) { await this.starting; if (!visible || this.visible) return; }
-    if (visible && this.child) await this.stop();
-    this.starting = this.launch(visible);
-    try { await this.starting; } finally { this.starting = null; }
+    const starting=(async()=>{
+      if(this.closed)throw new Error('站点浏览器已关闭');
+      if(this.socket?.readyState!==WebSocket.OPEN)await this.reconnect();
+      if(this.socket?.readyState===WebSocket.OPEN&&(!visible||this.visible))return;
+      if(this.socket||this.child)await this.stop();
+      await this.launch(visible);
+    })();
+    this.starting=starting;
+    try { await starting; } finally { if(this.starting===starting)this.starting = null; }
+  }
+  async reconnect(endpoint){
+    try{
+      if(!endpoint){
+        const file=path.join(this.profile,'DevToolsActivePort');if(fs.statSync(file).size>2048)return false;
+        const [port,route]=fs.readFileSync(file,'utf8').trim().split(/\r?\n/);
+        if(!/^\d{1,5}$/.test(port)||Number(port)<1||Number(port)>65535||!/^\/devtools\/browser\/[a-f\d-]+$/i.test(route||''))return false;
+        endpoint='ws://127.0.0.1:'+port+route;
+      }
+      await this.connect(endpoint);return true;
+    }catch{return false;}
+  }
+  async connect(endpoint){
+    const socket=this.socket=new WebSocket(endpoint,{maxPayload:8*1024*1024,handshakeTimeout:2000});
+    socket.on('message',raw=>{
+      let msg;try{msg=JSON.parse(raw);}catch{return;}
+      const pending=this.pending.get(msg.id);
+      if(pending?.socket===socket){clearTimeout(pending.timer);this.pending.delete(msg.id);msg.error?pending.reject(new Error(pending.method+': '+msg.error.message)):pending.resolve(msg.result);}
+      else if(this.socket===socket)this.events?.(msg);
+    });
+    socket.on('error',()=>{});
+    socket.on('close',()=>{
+      for(const [id,item]of this.pending)if(item.socket===socket){clearTimeout(item.timer);item.reject(new Error('站点浏览器连接已关闭，请重试'));this.pending.delete(id);}
+      if(this.socket===socket){this.socket=null;this.visible=false;}
+    });
+    try{
+      await new Promise((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
+      const version=await this.command('Browser.getVersion');this.visible=!/Headless/i.test(version.userAgent||'');
+    }catch(error){if(this.socket===socket)this.socket=null;socket.terminate();throw error;}
   }
   async launch(visible) {
     if (this.closed) throw new Error('站点浏览器已关闭');
@@ -30,17 +66,22 @@ class SourceBrowser {
     const args=['--no-first-run','--no-default-browser-check','--autoplay-policy=no-user-gesture-required','--remote-debugging-port=0','--user-data-dir='+this.profile,'about:blank'];
     if(!visible) args.unshift('--headless=new');
     const child=this.child=spawn(executable,args,{windowsHide:!visible,stdio:['ignore','ignore','pipe']});
-    const endpoint=await new Promise((resolve,reject)=>{
-      let output='';const timer=setTimeout(()=>{child.kill();reject(new Error('站点浏览器启动超时'));},15000);
-      child.once('error',e=>{clearTimeout(timer);reject(e);});child.once('exit',()=>{clearTimeout(timer);reject(new Error('站点浏览器已退出'));});
-      child.stderr.on('data',c=>{output=(output+c).slice(-12000);const m=/DevTools listening on (ws:\/\/\S+)/.exec(output);if(m){clearTimeout(timer);resolve(m[1]);}});
-    });
-    const socket=this.socket=new WebSocket(endpoint,{maxPayload:8*1024*1024});
-    socket.on('message',raw=>{const msg=JSON.parse(raw),pending=this.pending.get(msg.id);if(pending){clearTimeout(pending.timer);this.pending.delete(msg.id);msg.error?pending.reject(new Error(pending.method+': '+msg.error.message)):pending.resolve(msg.result);}else this.events?.(msg);});
-    socket.on('close',()=>{for(const item of this.pending.values()){clearTimeout(item.timer);item.reject(new Error('站点浏览器连接已关闭'));}this.pending.clear();});
-    await new Promise((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
+    let output='',endpoint='',spawnError,exitedAt=0;
+    child.once('error',error=>{spawnError=error;});child.once('exit',()=>{exitedAt=Date.now();});
+    child.stderr.on('data',chunk=>{output=(output+chunk).slice(-12000);endpoint=/DevTools listening on (ws:\/\/\S+)/.exec(output)?.[1]||'';});
+    const deadline=Date.now()+15000;
+    while(Date.now()<deadline){
+      if(this.closed)throw new Error('站点浏览器已关闭');
+      // Edge can exit its launcher while the actual browser keeps running.
+      // The profile endpoint, rather than the launcher PID, determines readiness.
+      if(await this.reconnect(endpoint||undefined))return;
+      if(spawnError)throw spawnError;
+      if(exitedAt&&child.exitCode!==0&&Date.now()-exitedAt>1500)throw new Error('站点浏览器未能启动，请关闭该应用的站点浏览器窗口后重试');
+      await delay(100);
+    }
+    if(child.exitCode===null)child.kill();throw new Error('站点浏览器启动超时，请重试');
   }
-  command(method,params={},sessionId){return new Promise((resolve,reject)=>{if(this.socket?.readyState!==WebSocket.OPEN){reject(new Error('站点浏览器未连接'));return;}const id=++this.sequence,timer=setTimeout(()=>{this.pending.delete(id);reject(new Error('站点浏览器请求超时'));},12000);this.pending.set(id,{resolve,reject,timer,method});this.socket.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});}
+  command(method,params={},sessionId){return new Promise((resolve,reject)=>{const socket=this.socket;if(socket?.readyState!==WebSocket.OPEN){reject(new Error('站点浏览器未连接'));return;}const id=++this.sequence,timer=setTimeout(()=>{this.pending.delete(id);reject(new Error('站点浏览器请求超时'));},12000);this.pending.set(id,{resolve,reject,timer,method,socket});socket.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});}
   async cookies(url){if(this.socket?.readyState!==WebSocket.OPEN)return '';const result=await this.command('Storage.getCookies'),target=new URL(url),host=target.hostname;return (result.cookies||[]).filter(c=>{const domain=c.domain.replace(/^\./,''),path=c.path||'/';return (host===domain||(c.domain.startsWith('.')&&host.endsWith('.'+domain)))&&(!c.secure||target.protocol==='https:')&&(!c.expires||c.expires<0||c.expires>Date.now()/1000)&&(target.pathname===path||target.pathname.startsWith(path.endsWith('/')?path:path+'/'));}).map(c=>c.name+'='+c.value).join('; ');}
   async open(address){await this.start(true);await this.command('Target.createTarget',{url:webUrl(address)});return {opened:true};}
   async clearLogin(addresses){
@@ -70,11 +111,11 @@ class SourceBrowser {
   run(address,options={}) {
     const task=this.queue.catch(()=>{}).then(()=>this.navigate(address,options));this.queue=task.catch(()=>{});return task;
   }
-  async navigate(address,{media=false,signal,timeout=30000,selectText='',headers:configured={},click=''}={}) {
+  async navigate(address,{media=false,signal,timeout=30000,selectText='',folders=[],headers:configured={},click=''}={}) {
     await this.start();if(signal?.aborted)throw signal.reason;
     const url=webUrl(address),target=await this.command('Target.createTarget',{url:'about:blank'});
     const session=(await this.command('Target.attachToTarget',{targetId:target.targetId,flatten:true})).sessionId;
-    const requests=new Map(),candidates=[],deadline=Date.now()+timeout;
+    const requests=new Map(),started=new Map(),candidates=[],deadline=Date.now()+timeout;
     const evaluate=async expression=>{const r=await this.command('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true},session);return r.result?.value;};
     this.events=event=>{
       if(event.sessionId!==session)return;
@@ -84,10 +125,10 @@ class SourceBrowser {
         if(event.params.networkId)requests.set(event.params.networkId,Object.fromEntries(headers.map(h=>[h.name,h.value])));
         this.command('Fetch.continueRequest',{requestId:event.params.requestId,headers},session).catch(()=>{});
       }
-      if(event.method==='Network.requestWillBeSent')requests.set(event.params.requestId,event.params.request.headers);
+      if(event.method==='Network.requestWillBeSent'){requests.set(event.params.requestId,event.params.request.headers);started.set(event.params.requestId,Date.now());}
       if(event.method==='Network.responseReceived'){
         const r=event.params.response;
-        if(r.status>=200&&r.status<300&&/^https?:/.test(r.url)&&(/mpegurl|video\/(?:mp4|x-flv)|audio\/mpeg/i.test(r.mimeType)||/\.(m3u8|mp4|flv)(?:[?#]|$)/i.test(r.url))&&!/\/(?:ads?|advert|preview)\//i.test(r.url))candidates.push({url:r.url,mime:r.mimeType,headers:requests.get(event.params.requestId)||{},time:Date.now()});
+        if(r.status>=200&&r.status<300&&/^https?:/.test(r.url)&&(/mpegurl|video\/(?:mp4|x-flv)|audio\/mpeg/i.test(r.mimeType)||/\.(m3u8|mp4|flv)(?:[?#]|$)/i.test(r.url))&&!/\/(?:ads?|advert|preview)\//i.test(r.url))candidates.push({url:r.url,mime:r.mimeType,headers:requests.get(event.params.requestId)||{},time:Date.now(),started:started.get(event.params.requestId)||Date.now()});
       }
     };
     try{
@@ -95,23 +136,27 @@ class SourceBrowser {
       if(Object.keys(cleanHeaders(configured)).length)await this.command('Fetch.enable',{patterns:[{urlPattern:'http*',requestStage:'Request'}]},session);
       if(cleanHeaders(configured)['user-agent'])await this.command('Network.setUserAgentOverride',{userAgent:cleanHeaders(configured)['user-agent']},session);
       await this.command('Page.navigate',{url},session);
-      let documentReady=0,clicked=false,selected=!selectText;
+      let documentReady=0,clicked=false,selected=!selectText,selectedAt=selectText?Infinity:0,folderIndex=0,nextSelection=0;
+      const directoryNames=Array.isArray(folders)?folders.filter(name=>typeof name==='string').slice(0,12):[];
+      const selectByName=async name=>evaluate(`(()=>{const name=${JSON.stringify(name)},match=e=>(e.getAttribute('title')||e.textContent||'').trim()===name;const e=Array.from(document.querySelectorAll('.file-click-wrap')).find(match)||Array.from(document.querySelectorAll('[title],a,span,div')).find(match);if(!e)return false;e.scrollIntoView({block:'center'});e.click();e.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,view:window,button:0,detail:2}));return true})()`);
       while(Date.now()<deadline){
         if(this.closed||signal?.aborted)throw signal?.reason||new Error('站点浏览器已关闭');
-        const state=await evaluate('({ready:document.readyState,title:document.title,html:document.documentElement?.outerHTML,url:location.href,video:document.querySelector("video")?.currentSrc})');
+        const state=await evaluate('({ready:document.readyState,title:document.title,html:document.documentElement?.outerHTML,url:location.href,video:document.querySelector("video")?.currentSrc,saveRequired:/该文件暂不支持预览[，,]?请保存至网盘后查看/.test(document.body?.innerText||"")})');
         if(state?.ready==='complete')documentReady ||= Date.now();
-        if(media&&documentReady&&!selected){selected=await evaluate(`(()=>{const name=${JSON.stringify(selectText)};const e=Array.from(document.querySelectorAll('[title],a,span')).find(e=>(e.getAttribute('title')||e.textContent||'').trim()===name);if(!e)return false;e.click();e.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));return true})()`);}
+        if(media&&documentReady&&!selected&&Date.now()>=nextSelection){const selectionTime=Date.now();selected=await selectByName(selectText);if(selected)selectedAt=selectionTime;else if(folderIndex<directoryNames.length&&await selectByName(directoryNames[folderIndex])){folderIndex++;nextSelection=Date.now()+500;}}
         if(!media&&documentReady&&Date.now()-documentReady>1500){
           if(/人机验证|Just a moment|Checking your browser|Access denied|Attention Required/i.test((state.title||'')+' '+(state.html||'').slice(0,1800)))throw Object.assign(new Error('请先打开站点浏览器完成人机验证或登录，再重试'),{status:428,verifyUrl:url});
           if(Buffer.byteLength(state.html||'')>4*1024*1024)throw new Error('站点页面超过 4 MiB 限制');
           return {text:state.html,body:Buffer.from(state.html||''),url:state.url,headers:{'content-type':'text/html'},cookie:await this.cookies(state.url)};
         }
-        if(media&&documentReady&&!clicked){clicked=true;await evaluate('(()=>{const v=document.querySelector("video");if(v)v.play().catch(()=>{});document.querySelector(".art-video-player,.dplayer-play-icon,.vjs-big-play-button,.art-icon-playback")?.click();return true})()');}
+        if(media&&documentReady&&selected&&!clicked){clicked=true;await evaluate('(()=>{const v=document.querySelector("video");if(v)v.play().catch(()=>{});document.querySelector(".art-video-player,.dplayer-play-icon,.vjs-big-play-button,.art-icon-playback")?.click();return true})()');}
+        if(media&&selected&&state?.saveRequired&&new URL(url).hostname==='pan.quark.cn')throw Object.assign(new Error('夸克要求先保存此文件到网盘后播放，会占用你的网盘空间'),{status:428,verifyUrl:url,requiresSave:true});
         if(media&&clicked&&/^[.#\[]/.test(click)&&click.length<=256){await evaluate(`(()=>{try{document.querySelector(${JSON.stringify(click)})?.click()}catch{}return true})()`);click='';}
-        if(media&&candidates.length&&Date.now()-candidates.at(-1).time>1200){
-          const selected=candidates.find(c=>c.url===state?.video)||candidates.filter(c=>/mpegurl|m3u8/i.test(c.url+' '+c.mime)).at(-1)||candidates.at(-1);
-          const headers=cleanHeaders({...selected.headers,cookie:await this.cookies(selected.url)});
-          return {url:selected.url,header:headers,type:selected.mime,parse:0,credentialOrigin:new URL(selected.url).origin};
+        const available=selected?candidates.filter(candidate=>candidate.started>=selectedAt):[];
+        if(media&&available.length&&Date.now()-available.at(-1).time>1200){
+          const candidate=available.find(c=>c.url===state?.video)||available.filter(c=>/mpegurl|m3u8/i.test(c.url+' '+c.mime)).at(-1)||available.at(-1);
+          const headers=cleanHeaders({...candidate.headers,cookie:await this.cookies(candidate.url)});
+          return {url:candidate.url,header:headers,type:candidate.mime,parse:0,credentialOrigin:new URL(candidate.url).origin};
         }
         await delay(250,undefined,{signal});
       }
@@ -119,10 +164,15 @@ class SourceBrowser {
     }finally{this.events=null;try{await this.command('Target.closeTarget',{targetId:target.targetId});}catch{}}
   }
   async stop(){
-    const socket=this.socket,child=this.child;try{if(socket?.readyState===WebSocket.OPEN)await this.command('Browser.close');}catch{}socket?.close();this.child=null;this.socket=null;
+    const socket=this.socket,child=this.child;
+    const disconnected=new Promise(resolve=>{if(!socket||socket.readyState===WebSocket.CLOSED){resolve();return;}const timer=setTimeout(resolve,2000);socket.once('close',()=>{clearTimeout(timer);resolve();});});
+    try{if(socket?.readyState===WebSocket.OPEN)await this.command('Browser.close');}catch{}socket?.close();
+    if(this.socket===socket)this.socket=null;if(this.child===child)this.child=null;
+    this.visible=false;await disconnected;
     const exited=ms=>new Promise(resolve=>{if(!child||child.exitCode!==null){resolve();return;}const done=()=>{clearTimeout(timer);resolve();};const timer=setTimeout(()=>{child.off('exit',done);resolve();},ms);child.once('exit',done);});
     await exited(2000);if(child&&child.exitCode===null){child.kill();await exited(1000);}
+    if(!child||child.exitCode!==null)await delay(200);
   }
-  async close(){this.closed=true;await this.stop();}
+  async close(){this.closed=true;await this.starting?.catch(()=>{});await this.stop();}
 }
 module.exports={SourceBrowser};

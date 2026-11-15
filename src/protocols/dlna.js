@@ -150,10 +150,11 @@ function mapTransportState(status) {
 }
 
 class DlnaService {
-  constructor({ port, getIdentity, getPreferredIp }) {
+  constructor({ port, getIdentity, getPreferredIp, extraTargets = () => [] }) {
     this.port = port;
     this.getIdentity = getIdentity;
     this.getPreferredIp = getPreferredIp;
+    this.extraTargets = extraTargets;
     this.ssdpSocket = null;
     this.ssdpSockets = [];
     this.notifyTimer = null;
@@ -189,7 +190,7 @@ class DlnaService {
       { st: 'urn:schemas-upnp-org:service:AVTransport:1', usn: `uuid:${uuid}::urn:schemas-upnp-org:service:AVTransport:1` },
       { st: 'urn:schemas-upnp-org:service:RenderingControl:1', usn: `uuid:${uuid}::urn:schemas-upnp-org:service:RenderingControl:1` },
       { st: 'urn:schemas-upnp-org:service:ConnectionManager:1', usn: `uuid:${uuid}::urn:schemas-upnp-org:service:ConnectionManager:1` },
-    ];
+    ].concat(this.extraTargets());
   }
 
   async start() {
@@ -361,7 +362,7 @@ class DlnaService {
         'CACHE-CONTROL: max-age=1800',
         `DATE: ${dateStr}`,
         'EXT:',
-        `LOCATION: ${location}`,
+        `LOCATION: ${target.location ? target.location(localIp) : location}`,
         'SERVER: Windows/10.0 UPnP/1.1 MobileTvScreen/1.0',
         `ST: ${target.st}`,
         `USN: ${target.usn}`,
@@ -376,10 +377,10 @@ class DlnaService {
     }
   }
 
-  _sendSsdpAliveOrBye(nts) {
+  _sendSsdpAliveOrBye(nts, onlyTargets = null) {
     if (!this.ssdpSockets.length) return;
     const { uuid } = this.getIdentity();
-    const targets = this._getSearchTargets(uuid);
+    const targets = onlyTargets || this._getSearchTargets(uuid);
     const ifaces = getLanInterfaces();
     const physicalIps = ifaces.filter((i) => !i.isVirtual).map((i) => i.address);
     const targetIps = physicalIps.length > 0 ? physicalIps : [getPrimaryLanIp()];
@@ -405,7 +406,7 @@ class DlnaService {
           'NOTIFY * HTTP/1.1',
           `HOST: ${SSDP_ADDR}:${SSDP_PORT}`,
           'CACHE-CONTROL: max-age=1800',
-          `LOCATION: ${location}`,
+          `LOCATION: ${target.location ? target.location(localIp) : location}`,
           `NT: ${target.st}`,
           `NTS: ${nts}`,
           'SERVER: Windows/10.0 UPnP/1.1 MobileTvScreen/1.0',

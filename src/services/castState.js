@@ -32,6 +32,7 @@ class CastStateService extends EventEmitter {
       position: 0, // anchor position in seconds
       duration: 0, // total duration in seconds (0 if live/unknown)
       playbackRate: 1,
+      danmakuEnabled: true,
       volume: 80, // 0 - 100
       muted: false,
       rotation: 0, // 0 | 90 | 180 | 270
@@ -56,6 +57,7 @@ class CastStateService extends EventEmitter {
       dlna: { active: false, port: 0, ssdpBound: false, lastError: null },
       airplay: { active: false, port: 0, mdnsActive: false, lastError: null },
       tvbox: { active: false, port: 0, lastError: null },
+      bilibili: { active: false, port: 0, experimental: true, lastError: null },
       websocket: { clients: 0, tvClients: 0, mobileClients: 0 },
     };
   }
@@ -152,6 +154,8 @@ class CastStateService extends EventEmitter {
       artwork: metadata.artwork || '',
       mimeType: metadata.mimeType || '',
       isLive: Boolean(metadata.isLive),
+      duration: Math.max(0,Number(metadata.duration)||0),
+      bilibili: protocol==='BilibiliCast'&&metadata.bilibili?Object.fromEntries(['aid','cid','roomId','contentType','epId','seasonId'].filter(key=>/^\d{1,20}$/.test(String(metadata.bilibili[key]))).map(key=>[key,String(metadata.bilibili[key])])):null,
     };
     this.state.clientIp = clientIp;
     this.state.clientName = clientName || protocol;
@@ -284,8 +288,9 @@ class CastStateService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  setDisplayOptions({ rotation, fitMode, streamMode, playbackRate }) {
+  setDisplayOptions({ rotation, fitMode, streamMode, playbackRate,danmakuEnabled }) {
     let changed = false;
+    if(typeof danmakuEnabled==='boolean'&&danmakuEnabled!==this.state.danmakuEnabled){this.state.danmakuEnabled=danmakuEnabled;changed=true;}
     if (rotation !== undefined && [0, 90, 180, 270].includes(Number(rotation))) {
       this.state.rotation = Number(rotation);
       changed = true;
@@ -314,10 +319,13 @@ class CastStateService extends EventEmitter {
    * Synchronize player telemetry from the TV browser/window back to backend memory.
    * Throttled so frequent timeupdate events do not flood WebSocket clients.
    */
-  syncFromPlayer({ position, duration, status, sessionId }) {
+  syncFromPlayer({ position, duration, status, sessionId,ended }) {
     if (sessionId !== undefined && sessionId !== this.state.sessionId) {
       return; // Ignore stale telemetry from an older media session
     }
+    // Stop clears the media before the browser receives the update. Messages
+    // already in flight must not revive playback or restore its old timeline.
+    if (!this.state.url) return;
     if (Number.isFinite(duration) && duration > 0) {
       this.state.duration = duration;
     }
@@ -325,12 +333,14 @@ class CastStateService extends EventEmitter {
       this.state.position = position;
       this._anchorTimeMs = performance.now();
     }
+    const notifyEnded=()=>{if(ended===true&&this.state.duration>0&&this.state.position>=this.state.duration-1&&this._endedSessionId!==this.state.sessionId){this._endedSessionId=this.state.sessionId;this.emit('mediaEnded',this.getSnapshot());}};
     if (status && ['PLAYING', 'PAUSED', 'LOADING', 'STOPPED', 'IDLE'].includes(status)) {
       const prev = this.state.status;
       this.state.status = status;
       if (prev !== status) {
         this.state.updatedAt = Date.now();
         this.emit('stateChange', this.getSnapshot());
+        notifyEnded();
         return;
       }
     }
@@ -345,6 +355,7 @@ class CastStateService extends EventEmitter {
         status: this.state.status,
       });
     }
+    notifyEnded();
   }
 
   setProtocolStatus(name, patch) {

@@ -101,8 +101,10 @@ async function main() {
   ].join('\r\n'));
   write(path.join(release, 'README-使用说明.txt'), '\ufeff' + [
     `MobileTV ${pkg.version} · Windows 64 位免安装版`, '',
-    '本版优化：HLS 点播前向缓冲 60–90 秒、64 MB 完整分片缓存、网络重试及播放进度恢复。',
-    '缓存自动按容量和有效期回收；播放优化保持源视频分辨率，不主动降低画质。', '',
+    '本版新增：多订阅切换、播放历史与收藏、电视式直播频道表、B站专用投屏（实验）。',
+    '修复换集状态与厂长媒体解析；解析有加载、取消、超时及重试入口。',
+    '夸克原文件按实际分辨率使用 32–256 MiB 有界缓冲，优化高分辨率播放及拖动音画同步。',
+    '缓存自动回收，视频码流不重编码；实际流畅度取决于源站、网络与设备。', '',
     '使用方法',
     '1. 将整个 ZIP 解压到一个文件夹，双击 MobileTV.exe。请勿只复制 EXE。',
     '2. 手机和电脑连接同一局域网。在视频 App 的 TV 投屏列表选择本机设备。',
@@ -112,7 +114,8 @@ async function main() {
     '常用快捷键：空格 / K 播放暂停；左右方向键快退快进；上下方向键调节音量；',
     'F 全屏；M 静音；? 查看帮助；Esc 关闭面板或退出全屏。', '',
     '系统：Windows 10 / 11 x64，使用系统自带 .NET Framework 4.x。',
-    '界面优先使用 Microsoft Edge，其次 Chrome；已内置 Node.js 和 FFmpeg，无需另装。',
+    '播放器优先使用已安装的 Chrome，未安装时使用 Microsoft Edge；已内置 Node.js 和 FFmpeg。',
+    'Chrome 与 Edge 使用各自独立的播放配置。环境变量 MOBILETV_PLAYER_BROWSER=edge 可优先使用 Edge。',
     '本机地址：http://127.0.0.1:8080/ 。主服务 8080，AirPlay 7000，影视投屏 9978。',
     '苹果接收支持基础 AirPlay 视频和照片；不支持苹果屏幕镜像或 DRM 视频。',
     'Android 17 上请使用支持本地网络权限的新版视频 App，并允许相关权限。', '',
@@ -133,9 +136,9 @@ async function main() {
   write(versionSource, `using System.Reflection;\n[assembly: AssemblyTitle("MobileTV")]\n[assembly: AssemblyProduct("MobileTV")]\n[assembly: AssemblyVersion("${pkg.version}.0")]\n[assembly: AssemblyFileVersion("${pkg.version}.0")]\n`);
   const compiler = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
   console.log(run(compiler, ['/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/codepage:65001', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll', `/win32icon:${icon}`, `/win32manifest:${path.join(root, 'packaging', 'app.manifest')}`, `/out:${path.join(release, 'MobileTV.exe')}`, path.join(root, 'packaging', 'Launcher.cs'), versionSource]).trim());
-  let sourceCommit = null;
-  try { sourceCommit = run('git', ['rev-parse', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch { /* Source archives may not include Git metadata. */ }
-  const info = { name: 'MobileTV', version: pkg.version, platform: 'win32', arch: 'x64', builtAt: new Date().toISOString(), sourceCommit, node: process.version, ffmpeg: ffmpegVersion, dependencies: dependencies.length, sha256: { 'runtime/node.exe': await hash(runtime), 'tools/ffmpeg.exe': await hash(ffmpeg), 'MobileTV.exe': await hash(path.join(release, 'MobileTV.exe')) } };
+  let sourceCommit = null, sourceDirty = null;
+  try { sourceCommit = run('git', ['rev-parse', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); sourceDirty = Boolean(run('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim()); } catch { /* Source archives may not include Git metadata. */ }
+  const info = { name: 'MobileTV', version: pkg.version, platform: 'win32', arch: 'x64', builtAt: new Date().toISOString(), sourceCommit, sourceDirty, node: process.version, ffmpeg: ffmpegVersion, dependencies: dependencies.length, sha256: { 'runtime/node.exe': await hash(runtime), 'tools/ffmpeg.exe': await hash(ffmpeg), 'MobileTV.exe': await hash(path.join(release, 'MobileTV.exe')) } };
   write(path.join(release, 'build-info.json'), JSON.stringify(info, null, 2) + '\n');
   console.log('Creating portable ZIP...');
   const zip = path.join(dist, name + '.zip');

@@ -7,6 +7,8 @@ const { spawn } = require('child_process');
 const express = require('express');
 const castState = require('./castState');
 const { SegmentCache } = require('./segmentCache');
+const { OriginalRangeCache } = require('./originalRangeCache');
+const { OriginalHttpPool } = require('./originalHttpPool');
 const mediaHeaders = require('./mediaHeaders');
 const { HlsAdFilter } = require('./hlsAdFilter');
 
@@ -188,10 +190,30 @@ function isM3u8Response(url, contentType = '') {
   }
 }
 
+function boundedOriginalRange(address,context,range){
+  const match=/^bytes=(\d+)-(\d*)$/.exec(range||'');
+  if(!context||!match)return range;
+  let url;try{url=new URL(address);}catch{return range;}
+  if(url.protocol!=='https:'||url.port||!/^dl-pc-[a-z0-9-]+\.drive\.quark\.cn$/i.test(url.hostname))return range;
+  const start=Number(match[1]),limit=start+1024*1024-1,end=match[2]?Math.min(Number(match[2]),limit):limit;
+  if(!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||end<start)return range;
+  // Native video requests an open-ended range. Small, complete HTTP ranges
+  // let Chromium finish metadata reads without waiting on a huge response.
+  return `bytes=${start}-${end}`;
+}
+
 function createProxyRouter(options = {}) {
   const router = express.Router();
   const cache = new SegmentCache(options.cache);
   router.mediaCache = cache;
+  const originalPool = options.originalCache?.open ? null : new OriginalHttpPool({ fallback: openUpstreamStream });
+  const originalCache = new OriginalRangeCache({ open: originalPool ? originalPool.open.bind(originalPool) : openUpstreamStream, adaptive: true, ...options.originalCache });
+  if (originalPool) {
+    const close = originalCache.close.bind(originalCache), stats = originalCache.stats.bind(originalCache);
+    originalCache.close = () => { close(); originalPool.close(); };
+    originalCache.stats = () => ({ ...stats(), transport: originalPool.stats() });
+  }
+  router.originalCache = originalCache;
   const adFilter = options.adFilter || new HlsAdFilter({dataDir:options.dataDir});
   router.adFilter = adFilter;
   router.get('/adfilter', (req,res) => res.json(adFilter.summary()));
@@ -219,7 +241,7 @@ function createProxyRouter(options = {}) {
 
     const upstreamHeaders = { ...Object.fromEntries(Object.entries(resolveUpstreamHeaders(headerContext ? '' : targetUrl, explicitReferer)).map(([key, value]) => [key.toLowerCase(), value])), ...customHeaders };
     if (req.headers.range) {
-      upstreamHeaders.Range = req.headers.range;
+      upstreamHeaders.Range = boundedOriginalRange(targetUrl,headerContext,req.headers.range);
     }
     if (req.headers['if-range']) {
       upstreamHeaders['If-Range'] = req.headers['if-range'];
@@ -244,6 +266,21 @@ function createProxyRouter(options = {}) {
     if (clientClosed) return;
     const cacheScope = explicitReferer + (headerContext ? '\n' + headerContext : '');
     const cacheKey = cache.key(targetUrl, cacheScope);
+    if (req.method === 'GET' && !req.headers['if-range'] && originalCache.eligible(targetUrl, headerContext, req.headers.range)) {
+      try {
+        const entry = await originalCache.response(targetUrl, upstreamHeaders, cacheScope, req.headers.range, controller.signal);
+        if (clientClosed) { entry?.stream?.destroy(); return; }
+        if (entry) {
+          res.status(entry.status).set(entry.headers);
+          if (entry.stream) pipeline(entry.stream, res, () => {});
+          else res.end(entry.body);
+          return;
+        }
+      } catch {
+        if (!clientClosed) res.status(502).json({ error: '原文件读取失败，请重试或重新选择节目' });
+        return;
+      }
+    }
     const cacheable = req.method === 'GET' && !req.headers.range && !req.headers['if-range'] && cache.eligible(cacheKey);
     if (cacheable) {
       let entry = cache.get(cacheKey);
@@ -263,7 +300,7 @@ function createProxyRouter(options = {}) {
       cacheFill = cache.begin(cacheKey);
     }
     try {
-      opened = await openUpstreamStream(targetUrl, upstreamHeaders, 5, controller.signal);
+      opened = await openUpstreamStream(mediaHeaders.requestUrl(headerContext, targetUrl), upstreamHeaders, 5, controller.signal);
     } catch (err) {
       cacheFill?.cancel();
       if (!clientClosed && !res.destroyed && !res.headersSent) {
@@ -299,7 +336,7 @@ function createProxyRouter(options = {}) {
 
       upRes.on('end', async () => {
         if (clientClosed || res.destroyed || res.headersSent) return;
-        let bodyText = Buffer.concat(chunks).toString('utf8');
+        let bodyText = mediaHeaders.cleanPlaylist(headerContext, Buffer.concat(chunks).toString('utf8'), finalUrl);
         const filtered = await adFilter.filter(bodyText, finalUrl);
         if (clientClosed || res.destroyed || res.headersSent) return;
         bodyText = filtered.content;
@@ -395,7 +432,8 @@ function createProxyRouter(options = {}) {
     }
 
     if (startPosition > 0) args.push('-ss', String(startPosition));
-    args.push('-i', targetUrl);
+    const inputUrl = mediaHeaders.hasPlaylistContext(headerContext, targetUrl) ? `http://127.0.0.1:${req.socket.localPort}/api/proxy?url=${encodeURIComponent(targetUrl)}&headerContext=${encodeURIComponent(headerContext)}&hls=1` : targetUrl;
+    args.push('-i', inputUrl);
     if (audioUrl) {
       const audioHeaders = { ...Object.fromEntries(Object.entries(resolveUpstreamHeaders(headerContext ? '' : audioUrl, explicitReferer)).map(([key,value])=>[key.toLowerCase(),value])), ...(headerContext ? mediaHeaders.get(headerContext,audioUrl) : {}) };
       args.push('-headers', Object.entries(audioHeaders).map(([key,value])=>`${key}: ${value}`).join('\r\n')+'\r\n');
@@ -423,7 +461,10 @@ function createProxyRouter(options = {}) {
       args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k');
     }
 
-    args.push('-movflags', 'frag_keyframe+empty_moov+default_base_moof', '-f', 'mp4', 'pipe:1');
+    // A copied video keeps its keyframe preroll while encoded audio is trimmed
+    // to the requested seek time. Wait for initial packets before writing the
+    // edit lists, so fragmented MP4 preserves their shared presentation clock.
+    args.push('-movflags', 'frag_keyframe+empty_moov+delay_moov+default_base_moof', '-f', 'mp4', 'pipe:1');
 
     const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let closed = false;
@@ -477,4 +518,5 @@ module.exports = {
   rewriteM3u8,
   resolveUpstreamHeaders,
   openUpstreamStream,
+  boundedOriginalRange,
 };

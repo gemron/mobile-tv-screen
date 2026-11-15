@@ -23,10 +23,12 @@
     "test:release": "node scripts/smoke-release.js",
     "test:installer": "node scripts/smoke-installer.js",
     "test:buffering": "node tests/buffering-browser.js",
+    "test:4k": "node tests/high-resolution-browser.js",
+    "test:sync": "node tests/remux-sync.js",
     "test:library:browser": "node tests/library-browser.js",
     "test:adfilter:browser": "node tests/ad-filter-browser.js",
     "test:source-browser": "node tests/source-browser.js",
-    "test": "node tests/player.js && node tests/proxy.js && node tests/cache.js && node tests/library.js && node tests/html-sites.js && node tests/content-adapters.js && node tests/playback-compat.js && node tests/cloud-accounts.js && node tests/source-probe.js && node tests/source-material.js && node tests/ad-filter.js && node tests/torrents.js && node tests/tvbox.js && node tests/verify.js"
+    "test": "node tests/player.js && node tests/proxy.js && node tests/remux-sync.js && node tests/artwork.js && node tests/cache.js && node tests/original-range-cache.js && node tests/original-http-pool.js && node tests/original-buffer-profile.js && node tests/library.js && node tests/episode-cancellation.js && node tests/library-collection.js && node tests/schedule.js && node tests/hmys-transport.js && node tests/source-edge-cases.js && node tests/html-sites.js && node tests/content-adapters.js && node tests/playback-compat.js && node tests/cloud-accounts.js && node tests/cloud-share.js && node tests/search-matching.js && node tests/discovery-search.js && node tests/source-probe.js && node tests/source-material.js && node tests/ad-filter.js && node tests/torrents.js && node tests/bilibili-media.js && node tests/bilibili-cast.js && node tests/tvbox.js && node tests/verify.js"
   },
   "keywords": [
     "dlna",

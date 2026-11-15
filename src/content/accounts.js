@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const loginUrls = { quark: 'https://pan.quark.cn/', uc: 'https://drive.uc.cn/', ali: 'https://www.alipan.com/', baidu: 'https://pan.baidu.com/' };
-const apiUrls = { quark: 'https://drive-pc.quark.cn/', uc: 'https://pc-api.uc.cn/', ali: 'https://api.aliyundrive.com/', baidu: 'https://pan.baidu.com/' };
-const logoutScopes = { quark: ['https://quark.cn', loginUrls.quark, apiUrls.quark], uc: ['https://uc.cn', loginUrls.uc, apiUrls.uc], ali: ['https://alipan.com', 'https://aliyundrive.com', loginUrls.ali, apiUrls.ali], baidu: ['https://baidu.com', loginUrls.baidu] };
+const loginUrls = { quark: 'https://pan.quark.cn/', uc: 'https://drive.uc.cn/', ali: 'https://www.alipan.com/', baidu: 'https://pan.baidu.com/',bili:'https://www.bilibili.com/' };
+const apiUrls = { quark: 'https://drive-pc.quark.cn/', uc: 'https://pc-api.uc.cn/', ali: 'https://api.aliyundrive.com/', baidu: 'https://pan.baidu.com/',bili:'https://api.bilibili.com/' };
+const logoutScopes = { quark: ['https://quark.cn', loginUrls.quark, apiUrls.quark], uc: ['https://uc.cn', loginUrls.uc, apiUrls.uc], ali: ['https://alipan.com', 'https://aliyundrive.com', loginUrls.ali, apiUrls.ali], baidu: ['https://baidu.com', loginUrls.baidu],bili:['https://bilibili.com',loginUrls.bili,apiUrls.bili] };
 class Accounts {
   constructor(directory, browser) {
     this.file = path.join(directory, 'cloud-accounts.json'); this.browser = browser; this.versions = new Map();
@@ -30,7 +30,7 @@ class Accounts {
     return this.summary();
   }
   async cookie(provider, api) { const saved = this.get(provider).cookie; if (saved) return saved; return this.browser.cookies(api || apiUrls[provider]); }
-  async login(provider) { this.get(provider); return this.browser.open(loginUrls[provider]); }
+  async login(provider) { this.get(provider); return this.browser.open(provider==='bili'?'https://passport.bilibili.com/login':loginUrls[provider]); }
   async validate(provider, candidate, signal) {
     if (!this.validator) throw new Error('账号检查服务尚未初始化');
     const deadline = signal ? AbortSignal.any([signal, AbortSignal.timeout(12000)]) : AbortSignal.timeout(12000);

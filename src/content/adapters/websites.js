@@ -3,6 +3,8 @@ const { createHmac } = require('crypto');
 const { resource } = require('../http');
 const { json, webUrl, cleanHeaders } = require('../format');
 const { scriptObject } = require('../html-sites');
+const acorn = require('acorn');
+const { value: literalValue } = require('../literals');
 const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const definitions={NewCz:['newcz','https://www.4kcz.com/'],Bttwoo:['bttwoo','https://www.bttwo.life/'],Libvio:['libvio','https://www.libvio.pw/'],Nmyswv:['nmys','https://vip.wwgz.cn:5200/']};
 const trim=v=>String(v||'').replace(/\s+/g,' ').trim();
@@ -70,6 +72,35 @@ async function detail(site,id,signal){
   return result;
 }
 function encodePlayKey(input){if(input==='0')return input;const key=Buffer.from('nbmovie2024secretkey'),bytes=Buffer.from(input);return Buffer.from(bytes.map((b,i)=>b^key[i%key.length])).toString('base64').replace(/\+/g,'-').replace(/\//g,'_');}
+function artplayerMedia(html) {
+  const $=cheerio.load(html),bindings=new Map(),players=new Map();
+  const read = node => node?.type==='Identifier' ? bindings.get(node.name) : literalValue(node);
+  const property = node => node.computed ? literalValue(node.property) : node.property?.name;
+  $('script:not([src])').slice(0,30).each((_,element)=>{
+    const script=$(element).html()||'';if(script.length>256*1024)return;
+    let program;try{program=acorn.parse(script,{ecmaVersion:'latest',sourceType:'script'});}catch{return;}
+    for(const statement of program.body.slice(0,1000)) {
+      if(statement.type==='VariableDeclaration')for(const declaration of statement.declarations){
+        if(declaration.id.type!=='Identifier')continue;
+        const name=declaration.id.name,init=declaration.init;
+        if(init?.type==='NewExpression'&&init.callee.type==='Identifier'&&init.callee.name==='Artplayer'){
+          const object=init.arguments[0],options={};
+          if(object?.type==='ObjectExpression')for(const field of object.properties){if(field.type!=='Property'||field.computed||field.kind!=='init'||field.method)continue;const key=field.key.name??field.key.value;if(['url','type','container'].includes(key))options[key]=read(field.value);}
+          else Object.assign(options,read(object)||{});
+          if(players.size<20)players.set(name,options);
+        }else if(bindings.size<5000)bindings.set(name,read(init));
+      }
+      else if(statement.type==='ExpressionStatement'&&statement.expression.type==='AssignmentExpression'&&statement.expression.operator==='='){
+        const assignment=statement.expression,left=assignment.left;
+        if(left.type==='Identifier'&&bindings.size<5000)bindings.set(left.name,read(assignment.right));
+        else if(left.type==='MemberExpression'&&left.object.type==='Identifier'&&players.has(left.object.name)&&['url','type'].includes(property(left)))players.get(left.object.name)[property(left)]=read(assignment.right);
+      }
+    }
+  });
+  const candidates=[...players.values()].filter(player=>typeof player.url==='string'&&player.url.trim()&&!/(?:^|[-_#.\s])(?:ads?|advert|preroll)(?:$|[-_\s])/i.test(String(player.container||'')));
+  const selected=candidates.find(player=>['#player','#artplayer','#video'].includes(player.container))||candidates[0];
+  return selected?{url:selected.url,type:typeof selected.type==='string'?selected.type:''}:null;
+}
 async function resolve(site,episode,signal){
   if(site.adapter==='bttwoo'&&episode.id.startsWith('bt:')){
     const data=JSON.parse(Buffer.from(episode.id.slice(3),'base64url').toString()),value=data.path.replace(/^\/?play\//,''),time=String(Date.now());
@@ -80,7 +111,12 @@ async function resolve(site,episode,signal){
     if(!values.length)throw new Error(r.msg||r.message||'比特未返回媒体地址');
     return {url:{values,position:values.length-1},parse:0,inheritHeaders:false,header:{'user-agent':UA}};
   }
-  try{return await resolvePage(site,episode.id,signal);}catch(error){if(!site.browser)throw error;return site.browser.run(webUrl(episode.id,site.api),{media:true,signal});}
+  let found;
+  try{found=await resolvePage(site,episode.id,signal);}catch(error){if(!site.browser)throw error;found=await site.browser.run(webUrl(episode.id,site.api),{media:true,signal});}
+  // NewCz's external image/TS CDN rejects the catalog/player Referer and Origin.
+  // Catalog requests keep their own headers; only the public media request changes.
+  if(site.adapter==='newcz'&&new URL(found.url).origin!==new URL(site.api).origin)return {...found,inheritHeaders:false,header:{'user-agent':UA}};
+  return found;
 }
 async function resolvePage(site,address,signal){
   const visited=new Set();let next=webUrl(address,site.api),referer=site.api,origin='';
@@ -93,10 +129,12 @@ async function resolvePage(site,address,signal){
     let found=$('video[src],source[src]').first().attr('src');
     const player=scriptObject(response.text,/var\s+player_\w+\s*=/);
     if(!found&&player?.url){found=String(player.url);if(Number(player.encrypt)===2)found=Buffer.from(found,'base64').toString('utf8');if([1,2].includes(Number(player.encrypt)))try{found=decodeURIComponent(found);}catch{}}
+    const configured = !found && artplayerMedia(response.text);
+    if(configured)return {url:webUrl(configured.url,response.url),parse:0,type:configured.type,header:{...site.headers,referer,...(origin?{origin}:{})}};
     if(!found){const frame=$('iframe[src]').first().attr('src');if(frame){const u=new URL(frame,response.url),value=u.searchParams.get('url')||u.searchParams.get('v');found=media(value)?value:u.href;origin=u.origin;if(media(value))referer=u.origin+'/';}}
     if(!found)found=/(?:url|src|file)\s*[:=]\s*['"](https?:[^'"\r\n]+\.(?:m3u8|mp4)(?:\?[^'"\r\n]*)?)['"]/i.exec(response.text.replace(/\\\//g,'/'))?.[1];
     if(!found)break;next=webUrl(found,response.url);
   }
   throw new Error('该线路需要浏览器解析或登录验证，未读到媒体地址');
 }
-module.exports={describe,list,detail,resolve,resolvePage,encodePlayKey};
+module.exports={describe,list,detail,resolve,resolvePage,encodePlayKey,artplayerMedia};

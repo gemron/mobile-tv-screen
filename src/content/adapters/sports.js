@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { resource, postResource } = require('../http');
 const { json, cleanHeaders, webUrl } = require('../format');
+const { schedule, sortEvents } = require('../schedule');
 const definitions = { LiveGz: 'https://api.5h5hbfhh.com/', Doubao: 'https://www.doubaozhibo.com/' };
 function describe(raw) {
   const plugin = /^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1]; if (!definitions[plugin]) return null;
@@ -27,14 +28,14 @@ async function list(site, { id = '', page = 1, keyword = '' } = {}, signal) {
     const classes = [['0-0-0', '全部赛事'], ['0-0-1', '足球'], ['0-0-2', '篮球']].map(([type_id, type_name]) => ({ type_id, type_name }));
     const [hot = '0', tag = '0', type = '0'] = (id || '0-0-0').split('-');
     const rows = await gz(site, '/gz/live/sports', { frame: '0', hot, tag, type }, signal);
-    const items = (Array.isArray(rows) ? rows : rows.list || []).map(v => ({ vod_id: [v.mid, v.match_id, v.ball_type].join('-'), vod_name: (v.home?.name || '') + ' vs ' + (v.visiting?.name || ''), vod_pic: v.home?.logo, vod_remarks: [v.league?.name || v.league_name, v.m_status === 2 ? '直播中' : v.match_time].filter(Boolean).join(' · ') }));
-    return { class: classes, list: items.filter(v => !keyword || v.vod_name.includes(keyword)), page: 1, pagecount: 1 };
+    const items = (Array.isArray(rows) ? rows : rows.list || []).map(v => ({ vod_id: [v.mid, v.match_id, v.ball_type].join('-'), vod_name: (v.home?.name || '') + ' vs ' + (v.visiting?.name || ''), vod_pic: v.home?.logo, vod_remarks: [v.league?.name || v.league_name, v.m_status === 2 ? '直播中' : v.match_time].filter(Boolean).join(' · '), schedule: schedule({ startAt: v.match_time, status: v.m_status === 2 ? 'live' : v.status_text || '', league: v.league?.name || v.league_name }) }));
+    return { class: classes, list: sortEvents(items.filter(v => !keyword || v.vod_name.includes(keyword))), page: 1, pagecount: 1 };
   }
   const replay = id.startsWith('replay'), path = replay ? '/api/v1/playbacks?page=' + page + '&pageSize=30&category=' + (id.endsWith('football') ? 'football' : 'basketball') : '/api/v1/home/schedules?date=' + new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(Date.now()) + '&days=5&category=all&continuous=true&pageSize=30&q=' + encodeURIComponent(keyword);
   const data = await db(site, path, signal), items = (data.items || []).map(v => {
-    const match = v.schedule || v; return { vod_id: encoded(v), vod_name: match.title || [match.home, match.away].filter(Boolean).join(' VS '), vod_pic: v.cover || match.homeLogo, vod_remarks: [match.league, match.matchTime].filter(Boolean).join(' · ') };
+    const match = v.schedule || v; return { vod_id: encoded(v), vod_name: match.title || [match.home, match.away].filter(Boolean).join(' VS '), vod_pic: v.cover || match.homeLogo, vod_remarks: [match.league, match.matchTime].filter(Boolean).join(' · '), ...(!replay ? { schedule: schedule({ startAt: match.matchTime, status: match.statusText || match.status || '', league: match.league }) } : {}) };
   });
-  return { class: [['live', '直播'], ['replay_football', '足球回放'], ['replay_basketball', '篮球回放']].map(([type_id, type_name]) => ({ type_id, type_name })), list: items, page, pagecount: data.totalPages || (items.length >= 30 ? Number(page) + 1 : Number(page)) };
+  return { class: [['live', '直播'], ['replay_football', '足球回放'], ['replay_basketball', '篮球回放']].map(([type_id, type_name]) => ({ type_id, type_name })), list: replay ? items : sortEvents(items), page, pagecount: data.totalPages || (items.length >= 30 ? Number(page) + 1 : Number(page)) };
 }
 function signals(value) {
   const found = [];

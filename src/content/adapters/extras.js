@@ -2,6 +2,7 @@ const cheerio = require('cheerio');
 const { resource, postResource } = require('../http');
 const { json, webUrl, cleanHeaders } = require('../format');
 const { resolvePage } = require('./websites');
+const { schedule, sortEvents } = require('../schedule');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const definitions = {
   SixV: 'https://www.xb6v.com/', YGP: 'https://www.6huo.com/',
@@ -71,11 +72,15 @@ async function list(site, { id = '', page: pg = 1, keyword = '', filters = {} } 
   } else r = await page(site, address, signal);
   let items;
   if (kind === 'Kanqiu') {
-    items = [];
+    items = []; let date = '';
     r.$('.list-group-item').each((_, e) => {
-      const row = r.$(e), a = row.find('a[href*="/play/"],a[href$="/play"]').first(), name = text(row.find('.row.d-none').text());
-      if (a.length && name) items.push({ vod_id: webUrl(a.attr('href'), r.url), vod_name: name, vod_pic: row.find('.col-xs-1 img').first().attr('data-src'), vod_remarks: text(row.find('.btn-default').text()) });
+      const row = r.$(e); if (row.hasClass('live-list-group-time')) { date = /\d{4}-\d{2}-\d{2}/.exec(row.text())?.[0] || ''; return; }
+      const a = row.find('a[href*="/play/"],a[href$="/play"]').first(), teams = row.find('.team-name').map((_, team) => text(r.$(team).text())).get(), league = text(row.find('.game-type').first().text());
+      const match = schedule({ date, time: text(row.find('.category-game-time').first().text()), status: text(row.find('.pay-btn .btn').first().text()), league });
+      const name = teams.length >= 2 ? teams.slice(0, 2).join(' VS ') : text(row.find('.row.d-none').text());
+      if (a.length && name) items.push({ vod_id: webUrl(a.attr('href'), r.url), vod_name: name, vod_pic: row.find('.col-xs-1 img').first().attr('data-src'), vod_remarks: [league, match.time, match.statusLabel].filter(Boolean).join(' · '), schedule: match });
     });
+    items = sortEvents(items.map(item => ({ ...item, schedule: item.schedule })));
   } else items = cards(r.$, selector, r.url, kind);
   if (kind === 'Music') r.$('div.pull-right > div > ul > li > a').each((_, e) => { const a = r.$(e); if (a.attr('href')) classes.push({ type_id: a.attr('href'), type_name: text(a.attr('title') || a.text()) }); });
   if (!items.length && !keyword && kind !== 'Kanqiu') throw new Error('未读取到内容，源站可能已变更地址或页面结构');

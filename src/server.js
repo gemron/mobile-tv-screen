@@ -13,6 +13,7 @@ const { createProxyRouter } = require('./services/proxy');
 const DlnaService = require('./protocols/dlna');
 const AirPlayService = require('./protocols/airplay');
 const TvBoxService = require('./protocols/tvbox');
+const { BilibiliCastService } = require('./protocols/bilibiliCast');
 const { createLibraryRouter } = require('./content/router');
 const {
   getLanInterfaces,
@@ -149,7 +150,8 @@ async function createAppServer(options = {}) {
   app.disable('x-powered-by');
   app.use(cors());
 
-  const dlnaService = new DlnaService({ port, getIdentity, getPreferredIp });
+  let bilibiliService;
+  const dlnaService = new DlnaService({ port, getIdentity, getPreferredIp,extraTargets:()=>bilibiliService?.discoveryTargets()||[] });
   const airplayService = new AirPlayService({
     mainPort: port,
     airplayPort,
@@ -180,6 +182,23 @@ async function createAppServer(options = {}) {
   app.use('/api', express.json({ limit: '2mb' }));
   const libraryRouter = createLibraryRouter({ dataDir: options.dataDir || DATA_DIR, adFilter: proxyRouter.adFilter });
   app.use('/api/library', libraryRouter);
+  const biliConfigFile=path.join(options.dataDir||DATA_DIR,'bilibili-cast.json');let savedBili={};try{savedBili=JSON.parse(fs.readFileSync(biliConfigFile,'utf8'));}catch{}
+  let enableBilibili=options.enableBilibiliCast??(process.env.ENABLE_BILIBILI_CAST==='1'||savedBili.enabled===true);
+  const bilibiliResolver=options.bilibiliResolveMedia||require('./content/bilibili-cast').createBilibiliResolver({getSite:()=>{const site=libraryRouter.library.sites.find(site=>site.adapter==='bili')||{},cookie=libraryRouter.library.accounts.get('bili').cookie;return {...site,headers:{...site.headers,...(cookie?{cookie}:{})}};}});
+  bilibiliService=new BilibiliCastService({port:Number(options.bilibiliPort??process.env.BILIBILI_CAST_PORT??9958),mainPort:port,getIdentity,getPreferredIp,dlnaRouter:dlnaService.createRouter(),resolveMedia:bilibiliResolver,getAccount:()=>({signedIn:libraryRouter.library.accounts.get('bili').valid===true})});
+  app.get('/api/bilibili-cast',(req,res)=>res.json({...castState.protocols.bilibili,enabled:enableBilibili,capabilities:{discovery:true,playbackControl:true,danmaku:true,accountTransfer:false,qualitySwitch:true,autoNext:true}}));
+  app.get('/api/bilibili-cast/danmaku',async(req,res)=>{
+    const state=castState.getSnapshot(),cid=state.metadata?.bilibili?.cid;
+    if(state.protocol!=='BilibiliCast'||!state.url||Number(req.query.sessionId)!==state.sessionId||!cid){res.status(409).json({error:'弹幕播放会话已切换'});return;}
+    if(!bilibiliResolver.danmaku){res.status(501).json({error:'此媒体解析器不提供弹幕'});return;}
+    try{const items=await bilibiliResolver.danmaku(cid,AbortSignal.timeout(10000));if(castState.getSnapshot().sessionId!==state.sessionId){res.status(409).json({error:'弹幕播放会话已切换'});return;}res.json({sessionId:state.sessionId,cid,items});}catch{res.status(502).json({error:'暂时无法读取弹幕'});}
+  });
+  app.post('/api/bilibili-cast',async(req,res)=>{
+    try{if(typeof req.body?.enabled!=='boolean')return res.status(400).json({error:'enabled 必须为布尔值'});
+      if(req.body.enabled)await bilibiliService.start();else{dlnaService._sendSsdpAliveOrBye('ssdp:byebye',bilibiliService.discoveryTargets());await bilibiliService.stop();}
+      enableBilibili=req.body.enabled;fs.mkdirSync(path.dirname(biliConfigFile),{recursive:true});fs.writeFileSync(biliConfigFile,JSON.stringify({enabled:enableBilibili}));if(enableDlna)dlnaService._sendSsdpAliveOrBye('ssdp:alive');res.json({...castState.protocols.bilibili,enabled:enableBilibili});
+    }catch(error){res.status(503).json({error:'B站实验接收服务未能启动：'+error.message});}
+  });
 
   async function buildStatusPayload() {
     const primaryIp = getPrimaryLanIp(preferredIp);
@@ -209,6 +228,7 @@ async function createAppServer(options = {}) {
       logs: castState.getLogs(),
       history: castState.getHistory(),
       mediaCache: proxyRouter.mediaCache.stats(),
+      originalCache: proxyRouter.originalCache.stats(),
     };
   }
 
@@ -413,8 +433,14 @@ async function createAppServer(options = {}) {
   }
 
   // Forward CastStateService events to WebSocket clients
-  const onStateChange = (snap) => broadcastWs({ type: 'state', data: snap });
-  const onProgress = (prog) => broadcastWs({ type: 'progress', data: prog });
+  const onStateChange = (snap) => {
+    proxyRouter.originalCache.setMedia(snap.url, snap.status);
+    broadcastWs({ type: 'state', data: snap });
+  };
+  const onProgress = (prog) => {
+    const buffer = proxyRouter.originalCache.stats();
+    broadcastWs({ type: 'progress', data: { ...prog, originalBuffer: buffer.active ? { active: true, profile: buffer.profile, bytes: buffer.bytes, maxBytes: buffer.maxBytes, aheadBytes: buffer.aheadBytes, targetSeconds: buffer.targetSeconds } : { active: false } } });
+  };
   const onCommand = (cmd) => broadcastWs({ type: 'command', data: cmd }, 'tv');
   const onLog = (entry) => broadcastWs({ type: 'log', data: entry });
   const onProtoStatus = (protos) => broadcastWs({ type: 'protocols', data: protos });
@@ -460,7 +486,11 @@ async function createAppServer(options = {}) {
       }
 
       if (msg.type === 'player-telemetry') {
-        castState.syncFromPlayer(msg.data || {});
+        const data = msg.data || {}, snapshot = castState.getSnapshot();
+        if (clients.get(ws)?.role === 'tv' && data.sessionId === snapshot.sessionId && snapshot.url && snapshot.mediaType === 'video') {
+          proxyRouter.originalCache.setPlaybackInfo({ width: data.videoWidth, height: data.videoHeight, duration: Number.isFinite(data.duration) && data.duration > 0 ? data.duration : snapshot.duration }, snapshot.url);
+        }
+        castState.syncFromPlayer(data);
         return;
       }
 
@@ -517,7 +547,9 @@ async function createAppServer(options = {}) {
   dlnaService.port = actualPort;
   airplayService.mainPort = actualPort;
   tvboxService.mainPort = actualPort;
+  bilibiliService.mainPort = actualPort;
 
+  if(enableBilibili)await bilibiliService.start().catch(error=>castState.addLog('BilibiliCast','实验服务启动失败',{error:error.code||error.message}));
   if (enableDlna) await dlnaService.start();
   if (enableAirplay) await airplayService.start();
   if (enableTvbox) await tvboxService.start();
@@ -532,10 +564,12 @@ async function createAppServer(options = {}) {
     dlnaService,
     airplayService,
     tvboxService,
+    bilibiliService,
     async close() {
       await libraryRouter.library.close();
       await proxyRouter.adFilter.close();
       proxyRouter.mediaCache.clear();
+      proxyRouter.originalCache.close();
       castState.off('stateChange', onStateChange);
       castState.off('progress', onProgress);
       castState.off('command', onCommand);
@@ -544,6 +578,7 @@ async function createAppServer(options = {}) {
       await dlnaService.stop();
       await airplayService.stop();
       await tvboxService.stop();
+      await bilibiliService.stop();
       for (const ws of clients.keys()) {
         try {
           ws.terminate();

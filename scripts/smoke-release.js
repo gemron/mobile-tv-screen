@@ -39,6 +39,23 @@ async function main() {
   for (const file of ['MobileTV.exe', 'runtime/node.exe', 'tools/ffmpeg.exe', 'app/src/server.js', 'licenses/Node-LICENSE.txt', 'licenses/FFmpeg-LICENSE.txt']) assert.ok(fs.existsSync(path.join(release, file)), file);
   assert.ok(!fs.existsSync(path.join(release, 'app', 'data')), 'No development data in release');
   assert.ok(!fs.existsSync(path.join(release, 'app', 'src', 'diagnostics')), 'No development diagnostics');
+  let compared = 0;
+  for (const directory of ['src', 'public', 'docs']) {
+    for (const relative of fs.readdirSync(path.join(root, directory), { recursive: true })) {
+      if (directory === 'src' && relative.split(path.sep).includes('diagnostics')) continue;
+      const source = path.join(root, directory, relative);
+      if (!fs.statSync(source).isFile()) continue;
+      const target = path.join(release, ...(directory === 'docs' ? [] : ['app']), directory, relative);
+      assert.ok(fs.existsSync(target), `Missing packaged file: ${directory}/${relative}`);
+      assert.ok(fs.readFileSync(source).equals(fs.readFileSync(target)), `Stale packaged file: ${directory}/${relative}`);
+      compared++;
+    }
+  }
+  for (const file of ['README.md', 'CHANGELOG.md', 'app/package.json', 'app/package-lock.json']) assert.ok(fs.readFileSync(path.join(root, file.replace(/^app\//, ''))).equals(fs.readFileSync(path.join(release, file))), file);
+  const buildInfo = JSON.parse(fs.readFileSync(path.join(release, 'build-info.json'), 'utf8'));
+  assert.equal(buildInfo.sourceCommit, latest.sourceCommit);
+  assert.equal(buildInfo.version, latest.version);
+  console.log(`PASS: ${compared} shipped source, asset and documentation files match the release checkout`);
   assert.equal(execFileSync(path.join(release, 'runtime', 'node.exe'), ['--version'], { encoding: 'utf8', windowsHide: true }).trim(), latest.node);
   assert.match(execFileSync(path.join(release, 'tools', 'ffmpeg.exe'), ['-version'], { encoding: 'utf8', windowsHide: true }), /ffmpeg version/);
   port = await new Promise(resolve => { const probe = net.createServer(); probe.listen(0, '127.0.0.1', () => { const free = probe.address().port; probe.close(() => resolve(free)); }); });
@@ -72,7 +89,7 @@ async function main() {
   console.log('PASS: compiled launcher starts bundled Node, with an independent user data directory');
   execFileSync(executable, args, { env, cwd: sandbox, windowsHide: true, timeout: 10000 });
   assert.equal(child.exitCode, null, 'Duplicate launch keeps the original instance alive');
-  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/css/library.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/js/library.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
+  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/css/library.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/js/artwork.js', '/js/danmaku.js', '/js/library.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
     const response = await request(file);
     assert.ok((await response.arrayBuffer()).byteLength > 0, file);
   }

@@ -1,0 +1,16 @@
+{
+  "checkedDate": "2026-11-16",
+  "scope": "Source review, read-only metadata/media requests, isolated real Edge playback and local regression fixtures. Samples do not certify all content or accounts.",
+  "decodedSamples": [
+    { "source": "hmys", "width": 1280, "height": 534, "positionSeconds": 3.01, "fix": "API-granted query envelope plus fresh per-path hex-time signatures for playlists and segments" },
+    { "source": "newcz", "width": 1920, "height": 1038, "positionSeconds": 3.06, "fix": "Separate catalog headers from external media CDN headers" },
+    { "source": "newcz", "sample": "reported episode 2", "width": 1920, "height": 800, "positionSeconds": 5.09, "durationSeconds": 4112.344, "seekPositionSeconds": 303.33, "fix": "Literal-only Artplayer configuration and variable assignments identify extensionless MP4 without following ad-plugin URLs" },
+    { "source": "alllive/huya", "width": 1104, "height": 622, "positionSeconds": 3.08, "fix": "Anonymous session, fresh playback signature and validated FLV route" },
+    { "source": "alllive/douyu", "width": 1280, "height": 720, "positionSeconds": 3.03, "fix": "List metadata instead of obsolete detail API; official mobile player with mobile request headers" },
+    { "source": "alllive/bililive", "width": 1280, "height": 720, "positionSeconds": 3.11, "fix": "Current recommendation and room-play APIs with AVC media selection" }
+  ],
+  "requiresManualVerification": ["MTV1/Music", "Libvio"],
+  "episodeRegression": { "latestRequestWins": true, "lateSuccessAndFailureIgnored": true, "closeAbortsUpstream": true, "parseDeadlineSeconds": 40, "uiDeadlineSeconds": 45, "timeoutRetry": true },
+  "sports": { "source": "Kanqiu", "catalog": true, "mediaSegmentSampled": true, "decoded": false, "dateGrouping": true, "stateAndTimeOrdering": true, "dateAndStateFilters": true },
+  "privacy": "No media grants, cookies, signed URLs, subscription contents or phone identifiers are included in this report. No cloud files were saved."
+}

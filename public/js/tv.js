@@ -45,6 +45,7 @@
     hudTitle: $('hudTitle'),
     hudSubtitle: $('hudSubtitle'),
     metricPerf: $('metricPerf'),
+    metricBuffer: $('metricBuffer'),
     metricProto: $('metricProto'),
     videoResolution: $('videoResolution'),
     btnStopCast: $('btnStopCast'),
@@ -53,6 +54,9 @@
     lblCurrentTime: $('lblCurrentTime'),
     lblDuration: $('lblDuration'),
     seekSlider: $('seekSlider'),
+    seekTrack: $('seekTrack'),
+    seekBuffered: $('seekBuffered'),
+    seekPlayed: $('seekPlayed'),
     btnRewind15: $('btnRewind15'),
     btnPlayPause: $('btnPlayPause'),
     btnForward15: $('btnForward15'),
@@ -81,6 +85,8 @@
   let transcodeBase = 0;
   let streamDuration = 0;
   let hlsRecoveryTimer = null;
+  let originalBufferTimer = null;
+  let originalBufferReady = false;
   let hlsPlayer = null;
   let mpegtsPlayer = null;
   let peerConn = null;
@@ -91,6 +97,7 @@
   let hudTimer = null;
   let lastTelemetrySentMs = 0;
   let lastFrameCount = 0;
+  let lastDroppedCount = 0;
   let lastFrameTs = performance.now();
   let autoplayMutedFallback = false;
   window.MobileTVPlayerState = () => currentState;
@@ -98,6 +105,7 @@
   function playbackPosition() {
     return (Number(els.tvVideo.currentTime) || 0) + transcodeBase;
   }
+  window.MobileTVPlaybackPosition=playbackPosition;
 
   function playbackDuration() {
     const duration = Number(els.tvVideo.duration);
@@ -144,6 +152,55 @@
     }
   }
 
+  function startNativePlayback(video) {
+    if (activeStreamMode === 'transcode' && currentState?.mediaType === 'video' && /matroska/i.test(currentState?.metadata?.mimeType || '') && video.readyState >= 1 && !video.videoWidth) {
+      reportVideoDecoderFailure(video);
+      return;
+    }
+    let original = false;
+    try {
+      const proxy = new URL(activeUrl, location.href);
+      const source = proxy.origin === location.origin && proxy.pathname === '/api/proxy' && proxy.searchParams.has('headerContext') ? new URL(proxy.searchParams.get('url')) : null;
+      original = source?.protocol === 'https:' && !source.port && /^dl-pc-[a-z0-9-]+\.drive\.quark\.cn$/i.test(source.hostname);
+    } catch { /* Ordinary media starts immediately. */ }
+    if (!original || originalBufferReady || hlsPlayer || mpegtsPlayer) { safePlay(video); return; }
+    if (originalBufferTimer !== null) return;
+    let bufferingSince = null;
+    const check = () => {
+      originalBufferTimer = null;
+      if (currentState?.status !== 'PLAYING') return;
+      let ahead = 0;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= video.currentTime + 0.25 && video.buffered.end(i) > video.currentTime) ahead = video.buffered.end(i) - video.currentTime;
+      }
+      if ((ahead > 0 || video.readyState >= 1) && bufferingSince === null) bufferingSince = performance.now();
+      const duration = playbackDuration();
+      // Fragmented MP4 preloading is often capped to one short fragment while
+      // paused; use a smaller attainable reserve rather than waiting 12 seconds.
+      const reserve = activeStreamMode === 'transcode' ? 2 : 10;
+      const target = Math.min(reserve, duration > 0 ? Math.max(0, duration - playbackPosition()) : reserve);
+      // Build a short reserve for a variable-rate original, but never wait
+      // indefinitely when Chromium limits preloading while paused. Some MKV
+      // streams expose a decoded frame without any buffered time ranges.
+      const frameWithoutRanges = video.readyState >= 2 && video.videoWidth > 0 && video.buffered.length === 0;
+      if (frameWithoutRanges || (ahead > 0 && ahead >= target - 0.15) || (bufferingSince !== null && performance.now() - bufferingSince >= 12000)) {
+        originalBufferReady = true; safePlay(video); return;
+      }
+      const message = ahead > 0 ? `正在缓冲 · ${Math.floor(ahead)} / ${Math.ceil(target)} 秒` : '正在读取原文件…';
+      if (els.bufferingPill.textContent !== message) els.bufferingPill.textContent = message;
+      els.bufferingPill.classList.add('show');
+      originalBufferTimer = setTimeout(check, 200);
+    };
+    check();
+  }
+
+  function reportVideoDecoderFailure(video) {
+    video.pause();
+    els.bufferingPill.textContent = '当前浏览器无法解码这路视频，请检查硬件加速或切换播放线路';
+    els.bufferingPill.classList.add('show');
+    if (currentState?.status === 'PLAYING') postControl({ action: 'pause' });
+  }
+
   function formatSec(sec) {
     const s = Math.max(0, Math.floor(Number(sec) || 0));
     const h = Math.floor(s / 3600);
@@ -167,6 +224,7 @@
 
   function resolvePlaybackUrl(rawUrl, mode) {
     if (!rawUrl || rawUrl.startsWith('webrtc://')) return rawUrl;
+    if(isServerRemux(rawUrl))return rawUrl;
     let upstreamUrl = rawUrl;
     try {
       upstreamUrl = new URL(rawUrl, location.href).href;
@@ -185,7 +243,16 @@
     return isSameOriginStreamUrl(rawUrl) ? rawUrl : `/api/proxy?url=${encodeURIComponent(upstreamUrl)}`;
   }
 
+  function isServerRemux(url){try{const value=new URL(url,location.href);return value.origin===location.origin&&value.pathname==='/api/transcode';}catch{return false;}}
+
   function destroyMediaEngines() {
+    els.seekBuffered.style.background = 'none'; els.seekPlayed.style.width = '0%';
+    if (els.metricBuffer) els.metricBuffer.hidden = true;
+    if (originalBufferTimer !== null) clearTimeout(originalBufferTimer);
+    originalBufferTimer = null;
+    originalBufferReady = false;
+    lastFrameCount = lastDroppedCount = 0;
+    lastFrameTs = performance.now();
     if (hlsRecoveryTimer) clearTimeout(hlsRecoveryTimer);
     hlsRecoveryTimer = null;
     if (hlsPlayer) {
@@ -250,7 +317,7 @@
     els.tvImage.style.display = type === 'image' ? 'block' : 'none';
     els.audioStage.style.display = type === 'audio' ? 'flex' : 'none';
 
-    const showSeek = type === 'video' || type === 'audio';
+    const showSeek = (type === 'video' || type === 'audio') && !currentState?.metadata?.isLive;
     els.seekRow.style.display = showSeek ? 'flex' : 'none';
   }
 
@@ -263,9 +330,10 @@
 
   function attachVideoOrAudioStream(rawUrl, mode, resumePosition = 0) {
     destroyMediaEngines();
+    if(isServerRemux(rawUrl)){mode='transcode';activeStreamMode='transcode';}
     transcodeBase = mode === 'transcode' ? Math.max(0, resumePosition) : 0;
     let resolvedUrl = resolvePlaybackUrl(rawUrl, mode);
-    if (transcodeBase > 0) resolvedUrl += `&start=${encodeURIComponent(transcodeBase)}`;
+    if (transcodeBase > 0) {const value=new URL(resolvedUrl,location.href);value.searchParams.set('start',String(transcodeBase));resolvedUrl=value.pathname+value.search;}
     const cleanPath = rawUrl.split('?')[0].toLowerCase();
     const video = els.tvVideo;
 
@@ -369,14 +437,14 @@
     video.src = resolvedUrl;
     video.load();
     if (currentState?.status === 'PLAYING') {
-      safePlay(video);
+      startNativePlayback(video);
     }
   }
 
-  function handlePlaybackFailure(rawUrl) {
+  function handlePlaybackFailure(rawUrl, resumePosition = playbackPosition()) {
     if (!currentState || currentState.status === 'IDLE' || currentState.mediaType === 'mirror') return;
 
-    const position = playbackPosition();
+    const position = Math.max(0, Number(resumePosition) || 0);
     streamDuration = playbackDuration();
     pendingStartPos = position;
     pendingStartUnit = 'seconds';
@@ -400,10 +468,12 @@
   function applyState(snap) {
     const prev = currentState;
     currentState = snap;
+    window.MobileTVDanmaku?.update(snap);
     updateProtocolBadges(snap.protocols);
 
     const isActive = snap.status && snap.status !== 'IDLE' && snap.status !== 'STOPPED';
     document.body.classList.toggle('casting-active', Boolean(isActive));
+    els.playerStage.classList.toggle('is-live', Boolean(isActive && snap.metadata?.isLive));
 
     if (!isActive) {
       destroyMediaEngines();
@@ -415,8 +485,9 @@
     }
 
     els.hudTitle.textContent = snap.metadata?.title || '正在投屏';
-    els.hudSubtitle.textContent = `${snap.protocol || 'Cast'} · ${snap.clientName || snap.clientIp || '局域网设备'}`;
-    els.metricProto.textContent = snap.protocol || 'CAST';
+    const protocolName=snap.protocol==='BilibiliCast'?'B站专用投屏':snap.protocol;
+    els.hudSubtitle.textContent = `${protocolName || 'Cast'} · ${snap.clientName || snap.clientIp || '局域网设备'}`;
+    els.metricProto.textContent = protocolName || 'CAST';
     if (els.btnStopCast.firstChild?.nodeType === 3) els.btnStopCast.firstChild.nodeValue = ['Library', 'Live'].includes(snap.protocol) ? '返回列表' : '结束投屏';
     els.btnPlayPause.textContent = snap.status === 'PLAYING' ? '暂停' : '播放';
     els.selectStreamMode.value = activeStreamMode;
@@ -431,7 +502,8 @@
     const mediaChanged = snap.sessionId !== activeSessionId || snap.url !== activeUrl;
     const sessionChanged = mediaChanged || (snap.streamMode || 'auto') !== requestedStreamMode;
     if (sessionChanged) {
-      const position = mediaChanged ? Number(snap.startPosition) || 0 : playbackPosition();
+      const joiningPlayback = !prev && Number(snap.position) > 1 && Number(snap.duration) > 0 && !snap.metadata?.isLive;
+      const position = mediaChanged ? joiningPlayback ? Number(snap.position) : Number(snap.startPosition) || 0 : playbackPosition();
       streamDuration = mediaChanged ? Number(snap.duration) || 0 : playbackDuration();
       activeSessionId = snap.sessionId;
       activeUrl = snap.url;
@@ -439,7 +511,7 @@
       requestedStreamMode = activeStreamMode;
       els.selectStreamMode.value = activeStreamMode;
       pendingStartPos = position;
-      pendingStartUnit = mediaChanged ? snap.startPositionUnit || 'auto' : 'seconds';
+      pendingStartUnit = mediaChanged && !joiningPlayback ? snap.startPositionUnit || 'auto' : 'seconds';
       fallbackStage = 0;
       if (!document.querySelector?.('dialog[open]') && !els.logDrawer.classList.contains('open')) {
         els.playerStage.focus({ preventScroll: true });
@@ -463,7 +535,7 @@
     } else if (prev && prev.status !== snap.status) {
       if (snap.mediaType === 'video' || snap.mediaType === 'audio') {
         if (snap.status === 'PLAYING') {
-          safePlay(els.tvVideo);
+          startNativePlayback(els.tvVideo);
         } else if (snap.status === 'PAUSED') {
           els.tvVideo.pause();
         }
@@ -623,8 +695,11 @@
           sessionId: activeSessionId,
           position: playbackPosition(),
           duration: playbackDuration(),
+          videoWidth: v.readyState >= 1 ? v.videoWidth || 0 : 0,
+          videoHeight: v.readyState >= 1 ? v.videoHeight || 0 : 0,
           // Loading metadata can report paused before autoplay completes.
           status: v.ended ? 'PAUSED' : v.paused ? undefined : 'PLAYING',
+          ended:Boolean(v.ended),
         },
       })
     );
@@ -663,10 +738,22 @@
       } else if (msg.type === 'state') {
         applyState(msg.data);
         if (msg.data?.status === 'IDLE') refreshStatus();
+      } else if (msg.type === 'progress' && msg.data?.sessionId === activeSessionId && els.metricBuffer) {
+        const buffer = msg.data.originalBuffer;
+        els.metricBuffer.hidden = !buffer?.active;
+        if (buffer?.active) {
+          const text = `原文件缓存 · ${buffer.profile} · ${(buffer.bytes / 1048576).toFixed(0)} / ${(buffer.maxBytes / 1048576).toFixed(0)} MB`;
+          if (els.metricBuffer.textContent !== text) els.metricBuffer.textContent = text;
+          els.metricBuffer.title = buffer.targetSeconds ? `前向预读目标约 ${buffer.targetSeconds} 秒，按平均码率估算并受容量上限约束` : '正在识别视频分辨率';
+        }
       } else if (msg.type === 'command' && msg.data?.type === 'seek') {
         if (Number.isFinite(msg.data.position)) {
           seekPlayback(msg.data.position);
         }
+      } else if(msg.type==='command'&&msg.data?.type==='danmaku'){
+        if(msg.data.sessionId===activeSessionId)window.MobileTVDanmaku?.push(msg.data);
+      } else if(msg.type==='command'&&msg.data?.type==='notice'){
+        if(msg.data.sessionId===activeSessionId)window.MobileTVUI?.toast(msg.data.message);
       } else if (msg.type === 'protocols') {
         updateProtocolBadges(msg.data);
       } else if (msg.type === 'deviceInfo') {
@@ -727,8 +814,21 @@
 
   // Video element events
   els.tvVideo.addEventListener('loadedmetadata', () => {
+    updateSeekBuffer();
+    // MKV may expose metadata and decoded frames while its audio clock remains
+    // stalled. Keep its known duration, then remux to MP4 with video copy and
+    // compatible audio rather than trusting native MKV playback readiness.
+    if (currentState?.mediaType === 'video' && /matroska/i.test(currentState?.metadata?.mimeType || '') && activeStreamMode !== 'transcode') {
+      const duration = playbackDuration();
+      const position = pendingStartPos > 0
+        ? pendingStartUnit !== 'seconds' && pendingStartPos <= 1 && duration > 1
+          ? pendingStartPos * duration : pendingStartPos
+        : playbackPosition();
+      handlePlaybackFailure(activeUrl, position);
+      return;
+    }
     updateVideoResolution();
-    if (!autoplayMutedFallback) els.bufferingPill.classList.remove('show');
+    if (!autoplayMutedFallback && originalBufferTimer === null) els.bufferingPill.classList.remove('show');
     const dur = playbackDuration();
     if (pendingStartPos > 0 && Number.isFinite(dur) && dur > 0) {
       const position = pendingStartUnit !== 'seconds' && pendingStartPos <= 1 && dur > 1
@@ -739,6 +839,10 @@
     if (Number.isFinite(dur) && dur > 0) {
       els.seekSlider.max = dur;
       els.lblDuration.textContent = formatSec(dur);
+    }
+    if (currentState?.mediaType === 'video' && /matroska/i.test(currentState?.metadata?.mimeType || '') && !els.tvVideo.videoWidth && activeStreamMode === 'transcode') {
+      reportVideoDecoderFailure(els.tvVideo);
+      return;
     }
     sendTelemetry(true);
   });
@@ -764,11 +868,30 @@
       els.lblCurrentTime.textContent = formatSec(playbackPosition());
     }
     sendTelemetry(false);
+    updateSeekBuffer();
   });
+
+  function updateSeekBuffer() {
+    const duration = playbackDuration(), video = els.tvVideo;
+    if (!(Number.isFinite(duration) && duration > 0) || !activeUrl || currentState?.metadata?.isLive) { els.seekBuffered.style.background = 'none'; els.seekPlayed.style.width = '0%'; return; }
+    const percent = value => Number(Math.min(100, Math.max(0, value / duration * 100)).toFixed(4));
+    const gradients = []; let ahead = 0;
+    // Each TimeRange is independent: seeking can leave several buffered islands.
+    for (let i = 0; i < Math.min(video.buffered?.length || 0, 128); i++) {
+      const start = video.buffered.start(i), end = video.buffered.end(i);
+      if (start <= video.currentTime + .1 && end >= video.currentTime) ahead = Math.max(ahead, end - video.currentTime);
+      const left = percent(start + transcodeBase), right = percent(end + transcodeBase);
+      if (right > left) gradients.push(`linear-gradient(to right, transparent ${left}%, #a2b7bc ${left}%, #a2b7bc ${right}%, transparent ${right}%)`);
+    }
+    const background = gradients.join(',') || 'none'; if (els.seekBuffered.style.background !== background) els.seekBuffered.style.background = background;
+    els.seekPlayed.style.width = percent(isUserSeeking ? Number(els.seekSlider.value) : playbackPosition()) + '%';
+    els.seekTrack.title = `已缓冲约 ${Math.floor(ahead)} 秒 · 浅色为缓冲，绿色为已播放`;
+  }
+  for (const event of ['progress', 'durationchange', 'seeked', 'emptied']) els.tvVideo.addEventListener(event, updateSeekBuffer);
 
   els.tvVideo.addEventListener('ended', () => {
     sendTelemetry(true);
-    postControl({ action: 'pause' });
+    if(currentState?.protocol!=='BilibiliCast')postControl({ action: 'pause' });
   });
 
   els.tvVideo.addEventListener('error', () => {
@@ -785,10 +908,13 @@
     let dropText = '';
     if (typeof v.getVideoPlaybackQuality === 'function') {
       const q = v.getVideoPlaybackQuality();
-      const fps = Math.round((q.totalVideoFrames - lastFrameCount) / dt);
+      const frames = Math.max(0, q.totalVideoFrames - lastFrameCount);
+      const dropped = Math.max(0, q.droppedVideoFrames - lastDroppedCount);
+      const fps = Math.round(Math.max(0, frames - dropped) / dt);
       lastFrameCount = q.totalVideoFrames;
+      lastDroppedCount = q.droppedVideoFrames;
       fpsText = String(Math.max(0, fps));
-      if (q.droppedVideoFrames > 0) dropText = ` | 丢帧:${q.droppedVideoFrames}`;
+      dropText = ` | 丢帧:${frames ? Math.round(dropped * 100 / frames) : 0}%`;
     }
     lastFrameTs = now;
 
@@ -877,6 +1003,7 @@
   els.seekSlider.addEventListener('input', () => {
     isUserSeeking = true;
     els.lblCurrentTime.textContent = formatSec(els.seekSlider.value);
+    updateSeekBuffer();
   });
   els.seekSlider.addEventListener('change', () => {
     isUserSeeking = false;
@@ -941,6 +1068,7 @@
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName || '') || event.target?.isContentEditable) return;
     if (document.querySelector?.('dialog[open]') || els.logDrawer.classList.contains('open')) return;
+    if (event.target?.closest?.('.live-channel-drawer')) return;
     const key = event.key.toLowerCase();
     if (key === 'f') {
       event.preventDefault();
