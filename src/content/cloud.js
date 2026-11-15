@@ -1,5 +1,5 @@
 const cheerio=require('cheerio');
-const {resource,postJson}=require('./http');
+const {resource,postJson,postResource}=require('./http');
 const {webUrl,json}=require('./format');
 const {extract}=require('./literals');
 const {loginUrls}=require('./accounts');
@@ -21,25 +21,61 @@ class Cloud{
   constructor(accounts,browser,{endpoints={}}={}){this.accounts=accounts;this.browser=browser;this.endpoints={...apiBases,...endpoints};}
   async headers(provider){const cookie=await this.accounts.cookie(provider,this.endpoints[provider]);return {'user-agent':UA,referer:loginUrls[provider],origin:new URL(loginUrls[provider]).origin,...(cookie?{cookie}:{})};}
   async mediaHeaders(provider,url){const headers=await this.headers(provider);if(new URL(url).origin!==new URL(this.endpoints[provider]).origin){delete headers.cookie;delete headers.authorization;}return headers;}
-  async request(provider,path,body,extra={},signal){
+  async mediaResult(provider,url,extra={}){const header=await this.mediaHeaders(provider,url);return {url,parse:0,header,...extra,credentialOrigin:header.cookie?new URL(url).origin:''};}
+  async request(provider,path,body,extra={},signal,retried=false){
     const url=new URL(path,this.endpoints[provider]);
     if(provider==='quark'||provider==='uc'){url.searchParams.set('pr',provider==='quark'?'ucpro':'UCBrowser');url.searchParams.set('fr','pc');url.searchParams.set('uc_param_str','');}
     const headers={...await this.headers(provider),...extra};
-    let result;
-    if(body===undefined)result=json((await resource(url.href,{headers,signal})).text);else result=await postJson(url.href,body,{headers,signal});
-    if(result.status&&Number(result.status)>=400||result.code&&![0,200].includes(Number(result.code))||result.errno&&Number(result.errno)!==0)throw Object.assign(new Error(result.message||result.msg||result.code||'网盘请求失败，请检查账号登录与分享密码'),{status:result.status===401?428:502});
-    if(result.error)throw new Error(result.message||result.error_description||result.error);
-    return result;
+    try {
+      const response=body===undefined?await resource(url.href,{headers,signal}):await postResource(url.href,body,{headers,signal});
+      const result=json(response.text);
+      if(result.status&&Number(result.status)>=400||result.code&&![0,200].includes(Number(result.code))||result.errno&&Number(result.errno)!==0||result.error){
+        const message=String(result.message||result.msg||result.error_description||result.error||result.code||'网盘请求失败，请检查账号登录与分享密码');
+        const expired=Number(result.status)===401||Number(result.errno)===-6||[31001,41001].includes(Number(result.code))||/AccessToken(?:Invalid|Expired)|InvalidAccessToken|not.?login|未登录|登录.*失效|token.*expired/i.test(message);
+        throw Object.assign(new Error(message),{status:expired?428:502});
+      }
+      // Quark/UC rotate this session cookie on normal API responses.
+      const updates=(response.headers['set-cookie']||[]),values=Array.isArray(updates)?updates:[updates];
+      if(['quark','uc'].includes(provider)&&headers.cookie&&values.length){
+        const jar=new Map(String(headers.cookie).split(';').map(item=>{const at=item.indexOf('=');return [item.slice(0,at).trim(),item.slice(at+1).trim()];}).filter(([key])=>key));
+        let changed=false;for(const value of values){const match=/^(__puus|__pus)=([^;]*)/.exec(value);if(match){jar.set(match[1],match[2]);changed=true;}}
+        if(changed){const previous=this.accounts.get(provider);if(previous.cookie===headers.cookie)this.accounts.set(provider,{cookie:[...jar].map(([key,value])=>key+'='+value).join('; ')},{checkedAt:previous.checkedAt||0,valid:previous.valid===true,status:previous.status||'unchecked'});}
+      }
+      return result;
+    } catch(error) {
+      if(/HTTP 401/.test(error.message))error.status=428;
+      if(provider==='ali'&&error.status===428&&extra.authorization&&!retried&&this.accounts.get('ali').refreshToken){const auth=await this.authorization(signal,true);return this.request(provider,path,body,{...extra,...auth},signal,true);}
+      if(error.status===428)error.verifyUrl=loginUrls[provider];throw error;
+    }
   }
-  async authorization(signal){
+  async authorization(signal,force=false){
     const account=this.accounts.get('ali');
     let expires=account.expiresAt||0;try{const jwt=json(Buffer.from(account.accessToken.split('.')[1],'base64url').toString());if(jwt.exp)expires=Number(jwt.exp)*1000;}catch{}
-    if(account.accessToken&&(!account.refreshToken||expires>Date.now()+60000))return {authorization:'Bearer '+account.accessToken};
+    if(!force&&account.accessToken&&(!account.refreshToken||expires>Date.now()+60000))return {authorization:'Bearer '+account.accessToken};
     if(!account.refreshToken)return {};
-    const response=await postJson(new URL('/v2/account/token',this.endpoints.ali).href,{refresh_token:account.refreshToken,grant_type:'refresh_token'},{signal,headers:{'user-agent':UA}});
-    if(!response.access_token)throw new Error(response.message||'阿里账号已过期，请重新登录');
-    this.accounts.set('ali',{accessToken:response.access_token,refreshToken:response.refresh_token||account.refreshToken,expiresAt:Date.now()+Math.max(60,Number(response.expires_in)||3600)*1000});
-    return {authorization:'Bearer '+response.access_token};
+    if(this.refreshing)return this.refreshing;
+    this.refreshing=(async()=>{
+      let response;try{response=await postJson(new URL('/v2/account/token',this.endpoints.ali).href,{refresh_token:account.refreshToken,grant_type:'refresh_token'},{signal,headers:{'user-agent':UA}});}catch(error){if(/HTTP 400|HTTP 401/.test(error.message))throw Object.assign(new Error('阿里登录已过期，请重新登录并保存浏览器状态'),{status:428,verifyUrl:loginUrls.ali});throw error;}
+      if(!response.access_token)throw Object.assign(new Error('阿里账号已过期，请重新登录'),{status:428,verifyUrl:loginUrls.ali});
+      if(this.accounts.get('ali').refreshToken!==account.refreshToken)throw Object.assign(new Error('账号已切换，本次令牌刷新已取消'),{status:409});
+      this.accounts.set('ali',{accessToken:response.access_token,refreshToken:response.refresh_token||account.refreshToken,expiresAt:Date.now()+Math.max(60,Number(response.expires_in)||3600)*1000});
+      return {authorization:'Bearer '+response.access_token};
+    })();try{return await this.refreshing;}finally{this.refreshing=null;}
+  }
+  async checkAccount(provider,credentials,signal){
+    const candidate={...credentials};
+    const scoped={get:p=>p===provider?{...candidate}:this.accounts.get(p),cookie:async p=>p===provider?candidate.cookie||'':this.accounts.cookie(p),set:(p,patch)=>{if(p===provider)Object.assign(candidate,patch);}};
+    const cloud=new Cloud(scoped,this.browser,{endpoints:this.endpoints});
+    if(provider==='ali'){
+      const auth=await cloud.authorization(signal);if(!auth.authorization)throw Object.assign(new Error('未读取到阿里登录令牌，请在官方页面登录后重新同步'),{status:428});
+      const user=await cloud.request(provider,'/v2/user/get',{},auth,signal);if(!user.user_id&&!user.default_drive_id)throw Object.assign(new Error('阿里账号未返回有效会话'),{status:428});
+    }else{
+      if(!candidate.cookie)throw Object.assign(new Error('没有读取到登录 Cookie，请先在官方页面完成登录'),{status:428});
+      const path=provider==='baidu'?'/api/list?clienttype=0&app_id=250528&web=1&dir=%2F&num=1&page=1':'file/sort?pdir_fid=0&_page=1&_size=1&_fetch_total=1';
+      const result=await cloud.request(provider,path,undefined,{},signal),list=provider==='baidu'?result.list:result.data?.list;
+      if(!Array.isArray(list))throw Object.assign(new Error('未读取到有效网盘会话，请重新登录后同步'),{status:428});
+    }
+    return candidate;
   }
   async token(info,signal){
     if(info.provider==='quark'||info.provider==='uc'){
@@ -82,19 +118,19 @@ class Cloud{
     const file=decode(id),provider=file.provider;
     if(file.drive)return this.resolveDrive(file,signal);
     if(provider==='baidu'){
-      if(file.dlink)return {url:file.dlink,parse:0,header:await this.mediaHeaders(provider,file.dlink)};
+      if(file.dlink)return this.mediaResult(provider,file.dlink);
       return this.browser.run(file.url,{media:true,signal,selectText:file.name});
     }
     const token=await this.token(file,signal);
     if(provider==='ali'){
       const auth=await this.authorization(signal),r=await this.request('ali','/v2/file/get_share_link_video_preview_play_info',{share_id:file.share,file_id:file.fid,category:'live_transcoding',template_id:'',get_preview_url:true},{...auth,'x-share-token':token},signal);
       const tasks=r.video_preview_play_info?.live_transcoding_task_list||r.live_transcoding_task_list||[],chosen=tasks.filter(v=>v.url).sort((a,b)=>(Number(b.template_width)||0)*(Number(b.template_height)||0)-(Number(a.template_width)||0)*(Number(a.template_height)||0))[0];
-      if(!chosen)throw new Error('阿里未返回可播放画质，请登录并确认此文件的观看权限');return {url:chosen.url,parse:0,type:'hls',header:await this.mediaHeaders('ali',chosen.url)};
+      if(!chosen)throw new Error('阿里未返回可播放画质，请登录并确认此文件的观看权限');return this.mediaResult('ali',chosen.url,{type:'hls'});
     }
     const r=await this.request(provider,'share/sharepage/video',{pwd_id:file.share,stoken:token,fid:file.fid,share_fid_token:file.fileToken,resolutions:'normal,low,high,super,2k,4k',supports:'fmp4'},{},signal);
     const options=r.data?.video_list||r.data?.list||[],chosen=options.filter(v=>v.video_info?.url||v.url).sort((a,b)=>(b.video_info?.width||b.width||0)*(b.video_info?.height||b.height||0)-(a.video_info?.width||a.width||0)*(a.video_info?.height||a.height||0))[0];
     if(!chosen)throw Object.assign(new Error('网盘未返回可播放地址，请在网盘账号中登录并确认分享权限'),{status:428});
-    const url=chosen.video_info?.url||chosen.url;return {url,parse:0,type:'hls',header:await this.mediaHeaders(provider,url)};
+    const url=chosen.video_info?.url||chosen.url;return this.mediaResult(provider,url,{type:'hls'});
   }
   async baiduDetail(info,signal){
     const response=await resource(info.url,{headers:await this.headers('baidu'),signal});
@@ -123,13 +159,13 @@ class Cloud{
   async resolveDrive(file,signal){
     if(file.provider==='quark'||file.provider==='uc'){
       const r=await this.request(file.provider,'file/v2/play',{fid:file.fid,resolutions:'normal,low,high,super,2k,4k',supports:'fmp4'},{},signal),options=r.data?.video_list||r.data?.list||[],chosen=options.filter(v=>v.video_info?.url||v.url).at(-1);
-      if(!chosen)throw new Error('当前网盘账号无法播放此文件');const url=chosen.video_info?.url||chosen.url;return {url,parse:0,type:'hls',header:await this.mediaHeaders(file.provider,url)};
+      if(!chosen)throw new Error('当前网盘账号无法播放此文件');const url=chosen.video_info?.url||chosen.url;return this.mediaResult(file.provider,url,{type:'hls'});
     }
     if(file.provider==='ali'){
-      const auth=await this.authorization(signal),r=await this.request('ali','/v2/file/get_video_preview_play_info',{drive_id:file.driveId,file_id:file.fid,category:'live_transcoding',template_id:'',get_preview_url:true},auth,signal),tasks=r.video_preview_play_info?.live_transcoding_task_list||r.live_transcoding_task_list||[],url=tasks.filter(t=>t.url).at(-1)?.url;if(!url)throw new Error('阿里账号无法播放此文件');return {url,parse:0,type:'hls',header:await this.mediaHeaders('ali',url)};
+      const auth=await this.authorization(signal),r=await this.request('ali','/v2/file/get_video_preview_play_info',{drive_id:file.driveId,file_id:file.fid,category:'live_transcoding',template_id:'',get_preview_url:true},auth,signal),tasks=r.video_preview_play_info?.live_transcoding_task_list||r.live_transcoding_task_list||[],url=tasks.filter(t=>t.url).at(-1)?.url;if(!url)throw new Error('阿里账号无法播放此文件');return this.mediaResult('ali',url,{type:'hls'});
     }
     const params=new URLSearchParams({app_id:'250528',clienttype:'0',type:'M3U8_AUTO_480',path:file.fid});
-    return {url:new URL('/api/streaming?'+params,this.endpoints.baidu).href,parse:0,type:'hls',header:await this.headers('baidu')};
+    return this.mediaResult('baidu',new URL('/api/streaming?'+params,this.endpoints.baidu).href,{type:'hls'});
   }
 }
 module.exports={Cloud,shareAddress,encode,decode,apiBases};

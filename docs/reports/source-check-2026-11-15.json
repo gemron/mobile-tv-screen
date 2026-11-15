@@ -1,0 +1,613 @@
+{
+  "checkedAt": "2026-11-15T05:08:01.431Z",
+  "method": "One representative title or search per configuration entry; HTTP media samples are not frame decoding.",
+  "counts": {
+    "total": 49,
+    "handlers": 48,
+    "resolved": 23,
+    "mediaSampled": 21,
+    "requiresLogin": 3,
+    "checkErrors": 21
+  },
+  "sites": [
+    {
+      "key": "点我切源",
+      "name": "豆豆┃片单",
+      "stage": "catalog-only",
+      "supported": true,
+      "list": 20,
+      "lines": 0,
+      "episodes": 0,
+      "notice": "未返回剧集"
+    },
+    {
+      "key": "MDrive",
+      "name": "🗂我的云盘┃配置",
+      "stage": "input-required",
+      "supported": true,
+      "list": 0,
+      "notice": "先登录网盘账号，再选择要浏览的网盘。"
+    },
+    {
+      "key": "玩偶",
+      "name": "👽玩偶哥哥┃4K弹幕",
+      "stage": "resolve",
+      "supported": true,
+      "list": 120,
+      "lines": 2,
+      "episodes": 12,
+      "error": "远端接口返回 HTTP 404",
+      "loginRequired": false
+    },
+    {
+      "key": "YGP",
+      "name": "🚀荐影┃预告片",
+      "stage": "detail",
+      "supported": true,
+      "list": 23,
+      "error": "该影片暂未发布预告片",
+      "loginRequired": false
+    },
+    {
+      "key": "alllive",
+      "name": "🎮一直播┃直播",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 120,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "MTV1",
+      "name": "🎙️易听┃音乐",
+      "stage": "home",
+      "supported": true,
+      "error": "此站需要人机验证，请点击“打开站点浏览器”完成验证后重试",
+      "loginRequired": true
+    },
+    {
+      "key": "爱刷",
+      "name": "♻️爱刷┃短视",
+      "stage": "catalog-only",
+      "supported": true,
+      "list": 23,
+      "notice": "随机短视频仅检查分类，不抽取实际内容"
+    },
+    {
+      "key": "seed",
+      "name": "💡聚剧┃四盘",
+      "stage": "input-required",
+      "supported": true,
+      "list": 0,
+      "notice": "需要选择分类、关键词或登录账号"
+    },
+    {
+      "key": "粤迷",
+      "name": "🦊粤迷┃港剧",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 24,
+      "lines": 1,
+      "episodes": 1714,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "光影",
+      "name": "🌞光影┃不卡",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "厂长",
+      "name": "📔厂长┃不卡",
+      "stage": "media",
+      "supported": true,
+      "list": 48,
+      "lines": 1,
+      "episodes": 2,
+      "resolved": true,
+      "error": "媒体请求返回 HTTP 403",
+      "loginRequired": false
+    },
+    {
+      "key": "立播",
+      "name": "🌟立播┃不卡",
+      "stage": "home",
+      "supported": true,
+      "error": "请先打开站点浏览器完成人机验证或登录，再重试",
+      "loginRequired": true
+    },
+    {
+      "key": "瓜子",
+      "name": "👀瓜子┃不卡",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 30,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "比特",
+      "name": "🍄比特┃不卡",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 71,
+      "lines": 1,
+      "episodes": 17,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "海绵",
+      "name": "🐬海绵┃不卡",
+      "stage": "resolve",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 22,
+      "error": "该线路的加密清单仍需专用适配，请暂时选择其他线路或站点",
+      "loginRequired": false
+    },
+    {
+      "key": "糯米",
+      "name": "🍓糯米┃秒播",
+      "stage": "home",
+      "supported": true,
+      "error": "未读取到影片，站点可能更换域名或需要浏览器验证",
+      "loginRequired": false
+    },
+    {
+      "key": "文采",
+      "name": "💮文采┃秒播",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 48,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "奶酪",
+      "name": "🧀奶酪┃秒播",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 17,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "剧迷",
+      "name": "🍊橘猫┃多线",
+      "stage": "resolve",
+      "supported": true,
+      "list": 6,
+      "lines": 4,
+      "episodes": 40,
+      "error": "The operation was aborted",
+      "loginRequired": false
+    },
+    {
+      "key": "热播",
+      "name": "📺热播┃多线",
+      "stage": "media",
+      "supported": true,
+      "list": 20,
+      "lines": 3,
+      "episodes": 49,
+      "resolved": true,
+      "error": "媒体请求返回 HTTP 404",
+      "loginRequired": false
+    },
+    {
+      "key": "风云",
+      "name": "☁️风云┃多线",
+      "stage": "resolve",
+      "supported": true,
+      "list": 81,
+      "lines": 4,
+      "episodes": 36,
+      "error": "The operation was aborted",
+      "loginRequired": false
+    },
+    {
+      "key": "荐片",
+      "name": "🥝荐片┃多线",
+      "stage": "home",
+      "supported": true,
+      "error": "荐片接口暂时无法访问：The operation was aborted。可以在站点设置更新接口地址。",
+      "loginRequired": false
+    },
+    {
+      "key": "奥特",
+      "name": "🏝奥特┃多线",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 39,
+      "lines": 2,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": true,
+        "decoded": false
+      }
+    },
+    {
+      "key": "新6V",
+      "name": "🧲新6V┃磁力",
+      "stage": "magnet-list",
+      "supported": true,
+      "list": 18,
+      "lines": 1,
+      "episodes": 3,
+      "notice": "真实磁力未自动下载"
+    },
+    {
+      "key": "AiDj",
+      "name": "❤️AI剧┃弹幕",
+      "stage": "unsupported",
+      "supported": false,
+      "error": "AI剧的原生设备注册、请求签名与加密媒体链路仍待移植"
+    },
+    {
+      "key": "Dm84",
+      "name": "🚌巴士┃动漫",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 56,
+      "lines": 3,
+      "episodes": 6,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "看球",
+      "name": "⚽八八┃看球",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 53,
+      "lines": 1,
+      "episodes": 5,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "多多",
+      "name": "🏀多多┃回放",
+      "stage": "home",
+      "supported": true,
+      "error": "The operation was aborted",
+      "loginRequired": false
+    },
+    {
+      "key": "吃瓜",
+      "name": "🏐吃瓜┃看球",
+      "stage": "detail",
+      "supported": true,
+      "list": 35,
+      "error": "比赛尚未开始或没有可用直播线路",
+      "loginRequired": false
+    },
+    {
+      "key": "MTV",
+      "name": "🎶明星┃MV",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "有声小说",
+      "name": "🎧有声┃小说",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 5329,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "audio",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "Aid",
+      "name": "🚑急救┃教学",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 19,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "虎牙js",
+      "name": "🐯虎牙┃直播",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 120,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "hls",
+        "bytes": 65536,
+        "encrypted": false,
+        "decoded": false
+      }
+    },
+    {
+      "key": "斗鱼js",
+      "name": "🐟斗鱼┃直播",
+      "stage": "detail",
+      "supported": true,
+      "list": 8,
+      "error": "配置格式错误：InvalidSymbol（位置 0）",
+      "loginRequired": false
+    },
+    {
+      "key": "ZPan",
+      "name": "🎈盘搜┃四盘",
+      "stage": "search",
+      "supported": true,
+      "error": "The operation was aborted",
+      "loginRequired": false
+    },
+    {
+      "key": "JPan",
+      "name": "🦋易搜┃四盘",
+      "stage": "search",
+      "supported": true,
+      "error": "远端接口返回 HTTP 403",
+      "loginRequired": false
+    },
+    {
+      "key": "YpanSo",
+      "name": "🐌盘她┃夸父",
+      "stage": "resolve",
+      "supported": true,
+      "list": 15,
+      "lines": 12,
+      "episodes": 2,
+      "error": "远端接口返回 HTTP 404",
+      "loginRequired": false
+    },
+    {
+      "key": "BpanSo",
+      "name": "🐞盘他┃嘟嘟",
+      "stage": "detail",
+      "supported": true,
+      "list": 1,
+      "error": "请在独立站点浏览器打开此百度分享，输入提取码或登录后重试",
+      "loginRequired": true
+    },
+    {
+      "key": "抠搜",
+      "name": "🌶️抠抠┃搜搜",
+      "stage": "search",
+      "supported": true,
+      "error": "getaddrinfo ENOTFOUND xiaomi666.fun",
+      "loginRequired": false
+    },
+    {
+      "key": "UC",
+      "name": "🌈优汐┃搜搜",
+      "stage": "search",
+      "supported": true,
+      "error": "远端接口返回 HTTP 404",
+      "loginRequired": false
+    },
+    {
+      "key": "Bili",
+      "name": "🅱哔哔合集┃弹幕",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "Biliych",
+      "name": "🅱哔哔演唱会┃弹幕",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 6,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "dr_兔小贝",
+      "name": "📚儿童┃启蒙",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 30,
+      "lines": 1,
+      "episodes": 1,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "少儿教育",
+      "name": "📚少儿┃教育",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 79,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "小学课堂",
+      "name": "📚小学┃课堂",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 100,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "初中课堂",
+      "name": "📚初中┃课堂",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 23,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "高中教育",
+      "name": "📚高中┃课堂",
+      "stage": "media-sampled",
+      "supported": true,
+      "list": 20,
+      "lines": 1,
+      "episodes": 54,
+      "resolved": true,
+      "probe": {
+        "sampled": true,
+        "kind": "media",
+        "bytes": 65536,
+        "decoded": false
+      }
+    },
+    {
+      "key": "push_agent",
+      "name": "🛴手机┃推送",
+      "stage": "input-required",
+      "supported": true,
+      "list": 0,
+      "notice": "在搜索框粘贴媒体网址、网页、网盘分享或磁力链接，然后打开播放。"
+    },
+    {
+      "key": "cc",
+      "name": "请勿信视频中任何广告",
+      "stage": "input-required",
+      "supported": true,
+      "list": 0,
+      "notice": "这是原配置中的提示条目：请勿相信视频中的广告。它没有影片或直播接口。"
+    }
+  ]
+}

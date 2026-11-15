@@ -14,6 +14,8 @@ function createLibraryRouter(options) {
   router.post('/accounts', task(req => ({accounts:library.accounts.set(req.body?.provider,req.body||{})})));
   router.post('/accounts/login', task(req => library.accounts.login(req.body?.provider)));
   router.post('/accounts/sync', task(async req => ({accounts:await library.accounts.sync(req.body?.provider)})));
+  router.post('/accounts/check', task(async req => ({accounts:await library.accounts.check(req.body?.provider)})));
+  router.post('/accounts/logout', task(async req => ({accounts:await library.accounts.logout(req.body?.provider)})));
   router.post('/browser/open', task(req => {const site=library.site(req.body?.siteKey);return library.browser.open(req.body?.verifyUrl||(site.adapter==='bili'?'https://www.bilibili.com/':site.api));}));
   router.get('/site/settings', task(req => library.siteSettings(req.query.site)));
   router.post('/site/settings', task(req => library.saveSiteSettings(req.body||{})));

@@ -27,6 +27,7 @@ class Library {
     this.browser = new SourceBrowser(dataDir);
     this.runtime = new RuntimeData(dataDir);
     this.accounts = new Accounts(dataDir,this.browser); this.cloud = new Cloud(this.accounts,this.browser);
+    this.accounts.validator = (provider,credentials,signal) => this.cloud.checkAccount(provider,credentials,signal);
     this.torrents = new Torrents(dataDir);
     this.onCastChange = state => {
       if (this.torrents.active?.selected >= 0 && (state.protocol !== 'Library' || !state.url.startsWith('/api/library/torrent/') || ['IDLE', 'STOPPED'].includes(state.status))) this.torrents.stop().catch(() => {});
@@ -52,6 +53,7 @@ class Library {
       site.browser = this.browser;
       site.material = material;
       site.accounts = this.accounts; site.cloud = this.cloud;
+      site.parseFlags = Array.isArray(document.flags) ? document.flags.map(String).slice(0,100) : [];
       site.torrents = this.torrents;
       const override = this.overrides?.[site.key];
       if (override?.endpoint) { site.api = override.endpoint; site.endpointOverride = true; site.headers.referer = new URL(override.endpoint).origin + '/'; }
@@ -68,7 +70,11 @@ class Library {
       return source;
     });
     this.parsers = (document.parses || []).slice(0, 100).flatMap((item, index) => {
-      try { return [{ key: String(index), name: String(item.name || `解析器 ${index + 1}`), type: Number(item.type || 0), url: webUrl(item.url, url), headers: cleanHeaders(item.ext?.header || item.header) }]; } catch { return []; }
+      try {
+        const type=Number(item.type||0),supported=[0,1].includes(type);
+        const parserUrl=item.url?webUrl(item.url,url):[0,4].includes(type)?'':webUrl(item.url);
+        return [{key:String(index),name:String(item.name||`解析器 ${index+1}`),type,url:parserUrl,headers:cleanHeaders(item.ext?.header||item.header),flags:Array.isArray(item.ext?.flag)?item.ext.flag.map(String):[],supported,reason:supported?'':[2,3].includes(type)?'依赖 Android 扩展解析器，尚未移植':type===4?'聚合解析尚未实现':'未知解析器类型'}];
+      } catch { return []; }
     });
     this.repositories = (document.urls || []).slice(0, 100).flatMap(item => { try { return [{ name: String(item.name || item.url), url: webUrl(item.url, url) }]; } catch { return []; } });
     this.cache.clear(); this.cacheBytes = 0; this.generation++;
@@ -76,7 +82,7 @@ class Library {
   }
 
   summary() {
-    return { url: this.config?.url || '', importedAt: this.config?.importedAt || null, sites: this.sites.map(({ key, name, type, supported, reason, implementation }) => ({ key, name, type, supported, reason, implementation })), lives: this.liveSources.map(({ key, name, supported, reason }) => ({ key, name, supported, reason })), parsers: this.parsers.map(({ key, name, type }) => ({ key, name, type })), repositories: this.repositories, implementation: 'nodejs' };
+    return { url: this.config?.url || '', importedAt: this.config?.importedAt || null, sites: this.sites.map(({ key, name, type, supported, reason, implementation }) => ({ key, name, type, supported, reason, implementation })), lives: this.liveSources.map(({ key, name, supported, reason }) => ({ key, name, supported, reason })), parsers: this.parsers.map(({ key, name, type, supported, reason }) => ({ key, name, type, supported, reason })), repositories: this.repositories, implementation: 'nodejs' };
   }
 
   siteSettings(key) {
@@ -188,20 +194,21 @@ class Library {
   playbackSummary() {
     const current = castState.getSnapshot();
     if (!this.playback || this.playback.sessionId !== current.sessionId || ['IDLE', 'STOPPED'].includes(current.status)) return null;
-    const { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey } = this.playback;
-    return { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey, sessionId: this.playback.sessionId };
+    const { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey, qualities, quality } = this.playback;
+    return { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey, qualities, quality, sessionId: this.playback.sessionId };
   }
 
-  async play({ siteKey, vodId, line = 0, index = 0, parserKey = '' }) {
+  async play({ siteKey, vodId, line = 0, index = 0, parserKey = '', quality, resumePosition = 0, sessionId }) {
+    if(sessionId!=null&&Number(sessionId)!==castState.getSnapshot().sessionId)throw failure('播放已切换，本次画质选择已取消',409);
     this.playController?.abort();
     const controller = this.playController = new AbortController(), generation = this.generation, previousSession = castState.getSnapshot().sessionId;
     const site = this.site(siteKey), video = await this.detail(siteKey, vodId);
     const group = video.lines[Number(line)], episode = group?.episodes[Number(index)];
     if (!episode) throw failure('所选播放线路或剧集不存在');
-    const resolved = await catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal);
+    const resolved = await catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal,{quality});
     if (controller.signal.aborted || generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
-    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true });
-    this.playback = { kind: 'vod', siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
+    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true,startPosition:Math.max(0,Math.min(604800,Number(resumePosition)||0)),startPositionUnit:'seconds' });
+    this.playback = { kind: 'vod', siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, qualities:resolved.qualities,quality:resolved.quality,episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
     return { state, playback: this.playbackSummary() };
   }
 
@@ -223,7 +230,7 @@ class Library {
     if (current.kind === 'vod') {
       const index = current.index + step;
       if (index < 0 || index >= current.episodes.length) throw failure('已经到达剧集边界', 409);
-      return this.play({ ...current, index });
+      return this.play({ ...current, index,quality:undefined });
     }
     const index = current.channels.findIndex(item => item.id === current.channelId);
     const next = current.channels[(index + step + current.channels.length) % current.channels.length];

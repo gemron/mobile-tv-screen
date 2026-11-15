@@ -1,6 +1,6 @@
 {
   "name": "mobile-tv-screen",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Windows LAN media casting receiver with DLNA, basic AirPlay, TVBox compatibility and a browser remote",
   "author": "gemron",
   "repository": {
@@ -26,7 +26,7 @@
     "test:library:browser": "node tests/library-browser.js",
     "test:adfilter:browser": "node tests/ad-filter-browser.js",
     "test:source-browser": "node tests/source-browser.js",
-    "test": "node tests/player.js && node tests/proxy.js && node tests/cache.js && node tests/library.js && node tests/html-sites.js && node tests/content-adapters.js && node tests/source-material.js && node tests/ad-filter.js && node tests/torrents.js && node tests/tvbox.js && node tests/verify.js"
+    "test": "node tests/player.js && node tests/proxy.js && node tests/cache.js && node tests/library.js && node tests/html-sites.js && node tests/content-adapters.js && node tests/playback-compat.js && node tests/cloud-accounts.js && node tests/source-probe.js && node tests/source-material.js && node tests/ad-filter.js && node tests/torrents.js && node tests/tvbox.js && node tests/verify.js"
   },
   "keywords": [
     "dlna",

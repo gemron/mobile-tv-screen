@@ -63,10 +63,13 @@ function webUrl(value, base) {
 }
 
 function cleanHeaders(value = {}) {
+  if (typeof value === 'string') { try { value = json(value); } catch { value = {}; } }
   const allowed = new Set(['user-agent', 'referer', 'origin', 'cookie', 'authorization', 'accept', 'accept-language', 'content-type', 'sign', 't', 'deviceid', 'version', 'app-version', 'app-id', 'appkey', 'timestamp', 'token', 'os', 'app', 'plat', 'platform', 'x-requested-with', 'x-listening-session', 'x-listening-timezone']);
   const result = {};
   for(const name of ['key','api-ver','ver','code','client-version','packagename','app_id','channel_code','cur_time','device_id','mob_mfr','mobmodel','package_name','sys_platform','sysrelease','x-share-token','x-device-id','x-signature'])allowed.add(name);
-  for (const [name, raw] of Object.entries(value && typeof value === 'object' ? value : {})) {
+  for (const [original, raw] of Object.entries(value && typeof value === 'object' && !Array.isArray(value) ? value : {})) {
+    const alias = original.toLowerCase();
+    const name = alias === 'ua' ? 'user-agent' : alias === 'referrer' ? 'referer' : original;
     const text = String(raw);
     if (allowed.has(name.toLowerCase()) && text.length <= (name.toLowerCase()==='cookie'?16000:4096) && !/[\r\n\0]/.test(text)) result[name.toLowerCase()] = text;
   }

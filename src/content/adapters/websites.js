@@ -76,14 +76,16 @@ async function resolve(site,episode,signal){
     const signature=createHmac('sha256',value).update(`${data.playId}:${time}:${value}`).digest('hex').slice(0,32);
     const u=new URL('/video/play',site.api);u.search=new URLSearchParams({p:data.playId,v:value,q:'1080',s:signature,t:time,k:encodePlayKey(data.user)}).toString();
     const r=json((await resource(u.href,{headers:site.headers,signal})).text),urls=r.data?.quality_urls||[];
-    const chosen=urls.at(-1)?.url;if(!chosen)throw new Error(r.msg||r.message||'比特未返回媒体地址');return {url:chosen,parse:0,header:site.headers};
+    const values=urls.filter(v=>v.url).map((v,index)=>({n:String(v.name||v.label||v.quality||`画质 ${index+1}`),v:v.url}));
+    if(!values.length)throw new Error(r.msg||r.message||'比特未返回媒体地址');
+    return {url:{values,position:values.length-1},parse:0,inheritHeaders:false,header:{'user-agent':UA}};
   }
   try{return await resolvePage(site,episode.id,signal);}catch(error){if(!site.browser)throw error;return site.browser.run(webUrl(episode.id,site.api),{media:true,signal});}
 }
 async function resolvePage(site,address,signal){
-  const visited=new Set();let next=webUrl(address,site.api),referer=site.api;
+  const visited=new Set();let next=webUrl(address,site.api),referer=site.api,origin='';
   for(let depth=0;depth<4;depth++){
-    if(media(next))return {url:next,parse:0,header:{...site.headers,referer}};
+    if(media(next))return {url:next,parse:0,header:{...site.headers,referer,...(origin?{origin}:{})}};
     if(visited.has(next))break;visited.add(next);
     const response=await page(site,next,signal),{$}=response;referer=response.url;
     const type=String(response.headers['content-type']||'');
@@ -91,7 +93,7 @@ async function resolvePage(site,address,signal){
     let found=$('video[src],source[src]').first().attr('src');
     const player=scriptObject(response.text,/var\s+player_\w+\s*=/);
     if(!found&&player?.url){found=String(player.url);if(Number(player.encrypt)===2)found=Buffer.from(found,'base64').toString('utf8');if([1,2].includes(Number(player.encrypt)))try{found=decodeURIComponent(found);}catch{}}
-    if(!found){const frame=$('iframe[src]').first().attr('src');if(frame){const u=new URL(frame,response.url),value=u.searchParams.get('url')||u.searchParams.get('v');found=media(value)?value:u.href;}}
+    if(!found){const frame=$('iframe[src]').first().attr('src');if(frame){const u=new URL(frame,response.url),value=u.searchParams.get('url')||u.searchParams.get('v');found=media(value)?value:u.href;origin=u.origin;if(media(value))referer=u.origin+'/';}}
     if(!found)found=/(?:url|src|file)\s*[:=]\s*['"](https?:[^'"\r\n]+\.(?:m3u8|mp4)(?:\?[^'"\r\n]*)?)['"]/i.exec(response.text.replace(/\\\//g,'/'))?.[1];
     if(!found)break;next=webUrl(found,response.url);
   }

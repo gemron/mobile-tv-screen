@@ -9,7 +9,7 @@
   async function api(route, body, signal) {
     const response = await fetch('/api/library' + route, { ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), signal });
     const result = await response.json();
-    if (!response.ok) { if(result.verifyUrl) state.verifyUrl=result.verifyUrl; throw Object.assign(new Error(result.error || '操作失败，请重试'),{verifyUrl:result.verifyUrl}); }
+    if (!response.ok) { if(result.verifyUrl&&!route.startsWith('/accounts')) state.verifyUrl=result.verifyUrl; throw Object.assign(new Error(result.error || '操作失败，请重试'),{verifyUrl:result.verifyUrl}); }
     return result;
   }
   function begin() { state.fetching?.abort(); state.fetching = new AbortController(); return { id: ++state.request, signal: state.fetching.signal }; }
@@ -36,7 +36,7 @@
     const liveSelect = $('libraryLiveSource'); liveSelect.replaceChildren();
     for (const source of config.lives) liveSelect.append(option(source.key, source.name + (source.supported ? '' : '（待适配）'), !source.supported));
     state.liveSource = config.lives.some(item => item.key === state.liveSource && item.supported) ? state.liveSource : config.lives.find(item => item.supported)?.key || ''; liveSelect.value = state.liveSource;
-    $('libraryParser').replaceChildren(option('', '自动 / 直链播放'), ...config.parsers.filter(item => [1, 2].includes(item.type)).map(item => option(item.key, item.name)));
+    $('libraryParser').replaceChildren(option('', '自动 / 直链播放'), ...config.parsers.map(item => option(item.key, item.name + (item.supported === false ? '（待移植）' : item.type === 0 ? '（网页）' : '（JSON）'),item.supported===false)));
     const pending = config.sites.filter(site => !site.supported);
     $('libraryUnsupported').replaceChildren(...pending.map(site => { const row = node('div', 'compatibility-row'); row.append(node('strong', '', site.name), node('span', '', site.reason)); return row; }));
     $('libraryCompatibilityDetails').hidden = !pending.length;
@@ -175,6 +175,8 @@
     $('libraryPlayerPrevious').textContent = vod ? '上一集' : '上一台'; $('libraryPlayerNext').textContent = vod ? '下一集' : '下一台';
     $('libraryPlayerPrevious').disabled = vod && playback.index === 0; $('libraryPlayerNext').disabled = vod && playback.index >= playback.episodes.length - 1;
     $('libraryChooseEpisode').hidden = !vod; $('libraryAutoNextLabel').hidden = !vod;
+    $('libraryQualityLabel').hidden = !vod || !playback.qualities || playback.qualities.length <= 1;
+    if(vod&&playback.qualities?.length){const signature=JSON.stringify(playback.qualities);if($('libraryQuality').dataset.choices!==signature){$('libraryQuality').replaceChildren(...playback.qualities.map((name,index)=>option(index,name)));$('libraryQuality').dataset.choices=signature;}$('libraryQuality').value=String(playback.quality||0);}
     const channel = !vod && playback.channels?.find(value => value.id === playback.channelId);
     $('librarySwitchLine').hidden = vod || !channel || channel.lines <= 1;
     if (channel?.lines > 1) $('librarySwitchLine').textContent = `换线 ${playback.channelLine + 1}/${channel.lines}`;
@@ -198,14 +200,17 @@
   function renderAccount() {
     const provider = $('libraryAccountProvider').value, account = accounts.find(a => a.provider === provider);
     $('libraryAliTokens').hidden = provider !== 'ali'; $('libraryAccountCookie').value = ''; $('libraryAccessToken').value = ''; $('libraryRefreshToken').value = ''; $('libraryClearAccount').checked = false;
-    $('libraryAccountSummary').textContent = account?.configured ? '已保存账号。留空不会覆盖已有配置。' : '尚未保存账号，可在官方页面登录后保存浏览器登录状态。';
+    $('libraryAccountSummary').textContent = !account?.configured ? '尚未保存账号，可在官方页面登录后保存浏览器登录状态。' : account.status==='verified' ? '上次会话检查通过：'+new Date(account.checkedAt).toLocaleString() : account.status==='expired' ? '登录已失效，请重新登录并同步。' : account.status==='unavailable' ? '账号资料已保存，最近一次检查未完成，请检查网络后重试。' : '账号资料已保存，尚未验证登录；留空不会覆盖已有配置。';
     $('libraryAccountMessage').textContent = '';
   }
   $('libraryAccounts').addEventListener('click', async () => { try { accounts = (await api('/accounts')).accounts; renderAccount(); $('libraryAccountsDialog').showModal(); } catch(error) { report(error); } });
   $('libraryCloseAccounts').addEventListener('click', () => $('libraryAccountsDialog').close());
   $('libraryAccountProvider').addEventListener('change', renderAccount);
   $('libraryAccountLogin').addEventListener('click', async () => { try { await api('/accounts/login', {provider:$('libraryAccountProvider').value}); $('libraryAccountMessage').textContent = '在已打开的官方页面完成登录，再点击“保存浏览器登录状态”。'; } catch(error) { $('libraryAccountMessage').textContent = error.message; } });
-  $('libraryAccountSync').addEventListener('click', async () => { try { accounts = (await api('/accounts/sync', {provider:$('libraryAccountProvider').value})).accounts; renderAccount(); $('libraryAccountMessage').textContent = '浏览器登录状态已保存。'; } catch(error) { $('libraryAccountMessage').textContent = error.message; } });
+  async function accountAction(route,message,button){const provider=$('libraryAccountProvider').value;button.disabled=true;try{accounts=(await api('/accounts/'+route,{provider})).accounts;if($('libraryAccountProvider').value===provider){renderAccount();$('libraryAccountMessage').textContent=message;}}catch(error){try{accounts=(await api('/accounts')).accounts;}catch{}if($('libraryAccountProvider').value===provider){renderAccount();$('libraryAccountMessage').textContent=error.message;}}finally{button.disabled=false;}}
+  $('libraryAccountSync').addEventListener('click',event=>accountAction('sync','浏览器登录状态已验证并保存。',event.currentTarget));
+  $('libraryAccountCheck').addEventListener('click',event=>accountAction('check','登录检查通过，可以尝试读取网盘文件。',event.currentTarget));
+  $('libraryAccountLogout').addEventListener('click',event=>accountAction('logout','该网盘已退出，保存的令牌及独立浏览器会话已清除。',event.currentTarget));
   $('libraryAccountForm').addEventListener('submit', async event => {
     event.preventDefault(); const body = {provider:$('libraryAccountProvider').value};
     if ($('libraryClearAccount').checked) Object.assign(body,{cookie:'',accessToken:'',refreshToken:''});
@@ -224,6 +229,7 @@
   $('libraryLiveGroup').addEventListener('change', () => { state.channelLimit = 300; renderChannels(); }); $('libraryLiveSearch').addEventListener('input', () => { state.channelLimit = 300; renderChannels(); });
   $('libraryMoreChannels').addEventListener('click', () => { state.channelLimit += 300; renderChannels(); });
   $('libraryPlayerPrevious').addEventListener('click', () => next(-1)); $('libraryPlayerNext').addEventListener('click', () => next(1));
+  $('libraryQuality').addEventListener('change',async event=>{const current=currentPlayback();if(!current||current.kind!=='vod')return;event.target.disabled=true;try{const result=await api('/play',{...current,quality:Number(event.target.value),resumePosition:window.MobileTVPlayerState()?.position||0,sessionId:current.sessionId});state.playback=result.playback;updateControls();}catch(error){toast(error.message);updateControls();}finally{event.target.disabled=false;}});
   $('libraryChooseEpisode').addEventListener('click', () => { const current = currentPlayback(); if (!current || current.kind !== 'vod') return; state.site = current.siteKey; showDetail(current.vodId); });
   $('librarySwitchLine').addEventListener('click', () => { const current = currentPlayback(); if (!current || current.kind !== 'live') return; const channel = current.channels.find(value => value.id === current.channelId); state.liveSource = current.sourceKey; playChannel(current.channelId, (current.channelLine + 1) % channel.lines); });
   try { $('libraryAutoNext').checked = localStorage.getItem('mobiletv-auto-next') !== 'off'; } catch {}
