@@ -1,0 +1,169 @@
+const fs = require('fs');
+const path = require('path');
+const { createHash } = require('crypto');
+const { resource } = require('./http');
+const { decodeDocument, webUrl, cleanHeaders } = require('./format');
+const { parseLive } = require('./live');
+const catalog = require('./catalog');
+const mediaHeaders = require('../services/mediaHeaders');
+const { DATA_DIR } = require('../utils/paths');
+const castState = require('../services/castState');
+
+const idFor = value => createHash('sha256').update(String(value)).digest('hex').slice(0, 16);
+const failure = (message, status = 400) => Object.assign(new Error(message), { status });
+
+class Library {
+  constructor({ dataDir = DATA_DIR, fetchResource = resource } = {}) {
+    this.file = path.join(dataDir, 'library-config.json');
+    this.fetchResource = fetchResource;
+    this.config = null; this.sites = []; this.liveSources = []; this.parsers = []; this.repositories = [];
+    this.cache = new Map(); this.cacheBytes = 0; this.generation = 0; this.playback = null; this.importController = null; this.playController = null;
+    try {
+      const stored = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      if (stored.version === 1 && stored.document && stored.url) this.apply(stored.document, stored.url, stored.importedAt);
+    } catch { /* A missing or invalid saved source does not stop casting. */ }
+  }
+
+  apply(document, url, importedAt = Date.now()) {
+    if (!document || typeof document !== 'object' || Array.isArray(document) || !['sites', 'lives', 'live', 'urls'].some(key => Array.isArray(document[key]))) throw failure('未找到点播站点、直播列表或配置仓');
+    this.config = { url, importedAt, document };
+    this.sites = (document.sites || []).filter(site => site && typeof site === 'object').slice(0, 300).map((site, index) => catalog.describeSite(site, url, index));
+    const seen = new Set(); this.sites = this.sites.filter(site => { if (seen.has(site.key)) return false; seen.add(site.key); return true; });
+    this.liveSources = (document.lives || document.live || []).filter(item => item && typeof item === 'object').slice(0, 200).map((item, index) => {
+      const source = { key: idFor(index + ':' + (item.name || item.url)), name: String(item.name || `直播源 ${index + 1}`), headers: cleanHeaders({ ...(item.header || item.headers || {}), ...(item.ua ? { 'user-agent': item.ua } : {}) }), channels: Array.isArray(item.channels) ? item.channels : null, supported: true };
+      try {
+        if (item.url) source.url = webUrl(item.url, url);
+        if (source.url && ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(source.url).hostname) && new URL(source.url).pathname === '/proxy') { source.supported = false; source.reason = '这个频道组依赖尚未移植的 Android 插件本地代理'; }
+        if (!source.url && !source.channels) throw new Error('直播源没有频道或地址');
+      } catch (error) { source.supported = false; source.reason = error.message; }
+      return source;
+    });
+    this.parsers = (document.parses || []).slice(0, 100).flatMap((item, index) => {
+      try { return [{ key: String(index), name: String(item.name || `解析器 ${index + 1}`), type: Number(item.type || 0), url: webUrl(item.url, url), headers: cleanHeaders(item.ext?.header || item.header) }]; } catch { return []; }
+    });
+    this.repositories = (document.urls || []).slice(0, 100).flatMap(item => { try { return [{ name: String(item.name || item.url), url: webUrl(item.url, url) }]; } catch { return []; } });
+    this.cache.clear(); this.cacheBytes = 0; this.generation++;
+    this.playController?.abort();
+  }
+
+  summary() {
+    return { url: this.config?.url || '', importedAt: this.config?.importedAt || null, sites: this.sites.map(({ key, name, type, supported, reason, implementation }) => ({ key, name, type, supported, reason, implementation })), lives: this.liveSources.map(({ key, name, supported, reason }) => ({ key, name, supported, reason })), parsers: this.parsers.map(({ key, name, type }) => ({ key, name, type })), repositories: this.repositories, implementation: 'nodejs' };
+  }
+
+  async import(address) {
+    const url = webUrl(address);
+    this.importController?.abort();
+    const controller = this.importController = new AbortController();
+    const response = await this.fetchResource(url, { signal: controller.signal });
+    let document;
+    if (/^\s*#EXTM3U|#genre#/i.test(response.text)) document = { lives: [{ name: '直播列表', url: response.url || url }] };
+    else {
+      document = decodeDocument(response.body);
+      if (Array.isArray(document)) document = { lives: [{ name: '直播列表', channels: document }] };
+    }
+    if (controller !== this.importController || controller.signal.aborted) throw failure('已被新的配置导入替代', 409);
+    // Validate using an independent instance before replacing a working source.
+    const staging = Object.create(Library.prototype);
+    staging.cache = new Map(); staging.cacheBytes = 0; staging.generation = 0;
+    staging.apply(document, response.url || url);
+    fs.mkdirSync(path.dirname(this.file), { recursive: true });
+    const importedAt = Date.now(), temporary = this.file + '.tmp';
+    fs.writeFileSync(temporary, JSON.stringify({ version: 1, url: response.url || url, importedAt, document }), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(temporary, this.file);
+    this.apply(document, response.url || url, importedAt);
+    this.playback = null;
+    return this.summary();
+  }
+
+  site(key) {
+    const site = this.sites.find(value => value.key === String(key));
+    if (!site) throw failure('站点不存在，请重新导入配置', 404);
+    if (!site.supported) throw failure(site.reason, 422);
+    return site;
+  }
+
+  async cached(key, ttl, load) {
+    const existing = this.cache.get(key);
+    if (existing && existing.expires > Date.now()) { this.cache.delete(key); this.cache.set(key, existing); return existing.data; }
+    if (existing) { this.cacheBytes -= existing.bytes; this.cache.delete(key); }
+    const generation = this.generation, data = await load();
+    if (generation !== this.generation) throw failure('配置已切换，请重新选择', 409);
+    const bytes = Buffer.byteLength(JSON.stringify(data));
+    if (bytes <= 4 * 1024 * 1024) {
+      const replaced = this.cache.get(key);
+      if (replaced) { this.cacheBytes -= replaced.bytes; this.cache.delete(key); }
+      while ((this.cacheBytes + bytes > 16 * 1024 * 1024 || this.cache.size >= 32) && this.cache.size) {
+        const oldest = this.cache.keys().next().value; this.cacheBytes -= this.cache.get(oldest).bytes; this.cache.delete(oldest);
+      }
+      this.cache.set(key, { data, bytes, expires: Date.now() + ttl }); this.cacheBytes += bytes;
+    }
+    return data;
+  }
+
+  home(key) { const site = this.site(key); return this.cached('home:' + key, 120000, () => catalog.home(site)); }
+  list(key, options) { const site = this.site(key); return this.cached('list:' + key + JSON.stringify(options), 60000, () => catalog.category(site, options)); }
+  detail(key, id) { const site = this.site(key); return this.cached('detail:' + key + ':' + id, 300000, () => catalog.detail(site, id)); }
+
+  async channels(key, refresh = false) {
+    const source = this.liveSources.find(item => item.key === String(key));
+    if (!source) throw failure('直播源不存在', 404);
+    if (!source.supported) throw failure(source.reason, 422);
+    const cacheKey = 'live:' + key;
+    if (refresh) { const old = this.cache.get(cacheKey); if (old) this.cacheBytes -= old.bytes; this.cache.delete(cacheKey); }
+    return this.cached(cacheKey, 5 * 60 * 1000, async () => {
+      const response = source.channels ? { text: JSON.stringify(source.channels), url: this.config.url } : await this.fetchResource(source.url, { headers: source.headers });
+      const channels = parseLive(response.text, response.url, source.headers);
+      if (!channels.length) throw new Error('直播源未返回可识别频道，支持 M3U、TXT 和 JSON 分组列表');
+      return channels;
+    });
+  }
+
+  playbackSummary() {
+    const current = castState.getSnapshot();
+    if (!this.playback || this.playback.sessionId !== current.sessionId || ['IDLE', 'STOPPED'].includes(current.status)) return null;
+    const { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey } = this.playback;
+    return { kind, siteKey, vodId, title, line, index, sourceKey, channelId, channelLine, episodes, channels, parserKey, sessionId: this.playback.sessionId };
+  }
+
+  async play({ siteKey, vodId, line = 0, index = 0, parserKey = '' }) {
+    this.playController?.abort();
+    const controller = this.playController = new AbortController(), generation = this.generation, previousSession = castState.getSnapshot().sessionId;
+    const site = this.site(siteKey), video = await this.detail(siteKey, vodId);
+    const group = video.lines[Number(line)], episode = group?.episodes[Number(index)];
+    if (!episode) throw failure('所选播放线路或剧集不存在');
+    const resolved = await catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal);
+    if (controller.signal.aborted || generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
+    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType }, clientName: '电脑独立点播', autoPlay: true });
+    this.playback = { kind: 'vod', siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
+    return { state, playback: this.playbackSummary() };
+  }
+
+  async playLive({ sourceKey, channelId, line = 0 }) {
+    this.playController?.abort();
+    const controller = this.playController = new AbortController(), generation = this.generation, previousSession = castState.getSnapshot().sessionId;
+    const channels = await this.channels(sourceKey), channel = channels.find(item => item.id === channelId), selected = channel?.urls[Number(line)];
+    if (!selected) throw failure('频道或播放线路不存在');
+    if (generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
+    const state = castState.setMedia({ url: mediaHeaders.mediaUrl(selected.url, selected.headers), protocol: 'Live', mediaType: 'video', metadata: { title: channel.name, artist: channel.group, artwork: channel.logo, mimeType: /^https?:/i.test(selected.url) ? catalog.mediaHint(selected.url) : '', isLive: true }, clientName: '电脑独立直播', autoPlay: true });
+    this.playback = { kind: 'live', title: channel.name, sourceKey, channelId, channelLine: Number(line), channels: channels.map(item => ({ id: item.id, name: item.name, lines: item.urls.length })), sessionId: state.sessionId };
+    return { state, playback: this.playbackSummary() };
+  }
+
+  async next(direction = 1, expectedSessionId) {
+    const current = this.playback;
+    if (!this.playbackSummary() || (expectedSessionId != null && Number(expectedSessionId) !== current.sessionId)) throw failure('当前播放已经切换', 409);
+    const step = Number(direction) < 0 ? -1 : 1;
+    if (current.kind === 'vod') {
+      const index = current.index + step;
+      if (index < 0 || index >= current.episodes.length) throw failure('已经到达剧集边界', 409);
+      return this.play({ ...current, index });
+    }
+    const index = current.channels.findIndex(item => item.id === current.channelId);
+    const next = current.channels[(index + step + current.channels.length) % current.channels.length];
+    return this.playLive({ sourceKey: current.sourceKey, channelId: next.id });
+  }
+
+  close() { this.importController?.abort(); this.playController?.abort(); this.cache.clear(); this.cacheBytes = 0; }
+}
+
+module.exports = { Library };

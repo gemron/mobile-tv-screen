@@ -93,6 +93,7 @@
   let lastFrameCount = 0;
   let lastFrameTs = performance.now();
   let autoplayMutedFallback = false;
+  window.MobileTVPlayerState = () => currentState;
 
   function playbackPosition() {
     return (Number(els.tvVideo.currentTime) || 0) + transcodeBase;
@@ -271,8 +272,10 @@
     els.bufferingPill.textContent = '正在加载内容…';
     els.bufferingPill.classList.add('show');
 
-    const isHls = cleanPath.endsWith('.m3u8') || cleanPath.endsWith('.m3u');
-    const isFlv = cleanPath.endsWith('.flv');
+    const mime = currentState?.metadata?.mimeType || '';
+    const isHls = /mpegurl/i.test(mime) || cleanPath.endsWith('.m3u8') || cleanPath.endsWith('.m3u');
+    const isFlv = /x-flv/i.test(mime) || cleanPath.endsWith('.flv');
+    const isTs = /mp2t|mpegts/i.test(mime) || cleanPath.endsWith('.ts');
 
     if (mode !== 'transcode' && isHls && window.Hls && window.Hls.isSupported()) {
       hlsPlayer = new window.Hls({
@@ -332,12 +335,12 @@
       return;
     }
 
-    if (mode !== 'transcode' && isFlv && window.mpegts && window.mpegts.isSupported()) {
+    if (mode !== 'transcode' && (isFlv || isTs) && window.mpegts && window.mpegts.isSupported()) {
       mpegtsPlayer = window.mpegts.createPlayer(
         {
-          type: 'flv',
+          type: isFlv ? 'flv' : 'mpegts',
           url: resolvedUrl,
-          isLive: false,
+          isLive: Boolean(currentState?.metadata?.isLive),
         },
         {
           enableWorker: true,
@@ -414,6 +417,7 @@
     els.hudTitle.textContent = snap.metadata?.title || '正在投屏';
     els.hudSubtitle.textContent = `${snap.protocol || 'Cast'} · ${snap.clientName || snap.clientIp || '局域网设备'}`;
     els.metricProto.textContent = snap.protocol || 'CAST';
+    if (els.btnStopCast.firstChild?.nodeType === 3) els.btnStopCast.firstChild.nodeValue = ['Library', 'Live'].includes(snap.protocol) ? '返回列表' : '结束投屏';
     els.btnPlayPause.textContent = snap.status === 'PLAYING' ? '暂停' : '播放';
     els.selectStreamMode.value = activeStreamMode;
     els.selectRate.value = String(snap.playbackRate || 1);
@@ -590,6 +594,7 @@
   }
 
   async function postControl(payload) {
+    payload = { ...payload, sessionId: currentState?.sessionId };
     if (ws && ws.readyState === WebSocket.OPEN && payload.action !== 'cast') {
       ws.send(JSON.stringify({ type: 'control', data: payload }));
       return;

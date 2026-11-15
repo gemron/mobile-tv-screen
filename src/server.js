@@ -13,6 +13,7 @@ const { createProxyRouter } = require('./services/proxy');
 const DlnaService = require('./protocols/dlna');
 const AirPlayService = require('./protocols/airplay');
 const TvBoxService = require('./protocols/tvbox');
+const { createLibraryRouter } = require('./content/router');
 const {
   getLanInterfaces,
   getPrimaryLanIp,
@@ -177,6 +178,8 @@ async function createAppServer(options = {}) {
 
   // JSON parser scoped to API routes (after AirPlay raw parsers)
   app.use('/api', express.json({ limit: '2mb' }));
+  const libraryRouter = createLibraryRouter({ dataDir: options.dataDir || DATA_DIR });
+  app.use('/api/library', libraryRouter);
 
   async function buildStatusPayload() {
     const primaryIp = getPrimaryLanIp(preferredIp);
@@ -245,6 +248,9 @@ async function createAppServer(options = {}) {
   app.post('/api/control', (req, res) => {
     const { action, url, title, mediaType, position, volume, muted, rotation, fitMode, streamMode, playbackRate } =
       req.body || {};
+    if (req.body?.sessionId != null && Number(req.body.sessionId) !== castState.getSnapshot().sessionId && action !== 'cast') {
+      res.status(409).json({ error: '播放会话已经切换' }); return;
+    }
 
     switch (action) {
       case 'cast':
@@ -460,6 +466,7 @@ async function createAppServer(options = {}) {
 
       if (msg.type === 'control') {
         const d = msg.data || {};
+        if (d.sessionId != null && Number(d.sessionId) !== castState.getSnapshot().sessionId) return;
         if (d.action === 'play') castState.play('Web');
         else if (d.action === 'pause') castState.pause('Web');
         else if (d.action === 'stop') castState.stop('Web');
@@ -526,6 +533,7 @@ async function createAppServer(options = {}) {
     airplayService,
     tvboxService,
     async close() {
+      libraryRouter.library.close();
       proxyRouter.mediaCache.clear();
       castState.off('stateChange', onStateChange);
       castState.off('progress', onProgress);

@@ -151,6 +151,7 @@ class CastStateService extends EventEmitter {
       album: metadata.album || '',
       artwork: metadata.artwork || '',
       mimeType: metadata.mimeType || '',
+      isLive: Boolean(metadata.isLive),
     };
     this.state.clientIp = clientIp;
     this.state.clientName = clientName || protocol;

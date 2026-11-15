@@ -2,9 +2,9 @@
 
 # MobileTV
 
-**让 Windows 电脑成为手机的局域网投屏接收端。**
+**在 Windows 上接收投屏，也能独立浏览影视、播放直播。**
 
-DLNA / 影视投屏 · 基础 AirPlay · 网页遥控 · 键盘操作 · 离线播放器资源
+电脑独立点播 / 直播 · DLNA / 影视投屏 · 基础 AirPlay · 网页遥控 · 键盘操作
 
 [![Release](https://img.shields.io/github/v/release/gemron/mobile-tv-screen?label=Release)](https://github.com/gemron/mobile-tv-screen/releases/latest)
 [![CI](https://github.com/gemron/mobile-tv-screen/actions/workflows/ci.yml/badge.svg)](https://github.com/gemron/mobile-tv-screen/actions/workflows/ci.yml)
@@ -15,7 +15,7 @@ DLNA / 影视投屏 · 基础 AirPlay · 网页遥控 · 键盘操作 · 离线�
 
 </div>
 
-MobileTV 在电脑上接收手机视频 App 的投屏请求，也提供手机浏览器遥控、媒体链接推送和本地文件上传。前端资源随程序分发，Windows 发行包包含 Node.js 和 FFmpeg，普通用户无需配置开发环境。
+MobileTV 在电脑上接收手机视频 App 的投屏请求，也能导入自己的订阅配置，在电脑上浏览分类、搜索影片、选集播放和观看直播，无需手机代解析。前端资源随程序分发，Windows 发行包包含 Node.js 和 FFmpeg，普通用户无需配置开发环境。
 
 > 本项目主要提供**媒体投屏**。基础 AirPlay 不等于苹果「屏幕镜像」；Miracast 入口调用 Windows 系统设置。具体边界见[协议兼容性](#协议兼容性)。
 
@@ -34,6 +34,8 @@ MobileTV 在电脑上接收手机视频 App 的投屏请求，也提供手机浏
 ## 功能亮点
 
 - **视频 App 投屏**：DLNA/UPnP 设备发现、播放、暂停、拖动进度和音量控制；提供影视类 App 的 HTTP 设备发现与投屏兼容接口。
+- **电脑独立点播**：导入 TVBox 配置，浏览分类、搜索、分页、影片详情、切换线路、选集与自动连播；Node.js 实现通用采集接口及已适配插件，无需 Android、JVM 或模拟器。
+- **电脑独立直播**：导入 M3U、TXT、JSON 频道列表，按分组或名称找台，支持上下台与多线路切换。
 - **浏览器遥控**：扫描电脑界面二维码，使用手机推送媒体链接、上传视频/音频/图片、控制播放和切换显示方式。
 - **实用播放器**：全屏、倍速、静音、旋转、适应/填充/拉伸、截图、浏览器支持时的画中画，以及实际解码分辨率、FPS、缓冲秒数显示。
 - **键盘优先**：空格播放暂停、方向键快进快退和调节音量；输入框、原生控件和弹窗保留各自的键盘行为。
@@ -71,6 +73,19 @@ MobileTV 在电脑上接收手机视频 App 的投屏请求，也提供手机浏
 | 共享 | 浏览器支持且满足安全上下文要求时，使用 WebRTC 共享屏幕或摄像头 |
 
 媒体链接需要指向可播放的资源；普通网页地址、需要网页登录的页面和受 DRM 保护的视频不保证可用。网络媒体仍需要正常的源站连接。
+
+### 电脑独立看影视与直播
+
+1. 在电脑顶部选择 **影视**，粘贴自己的配置订阅 URL，点击 **保存并载入**。
+2. 选择站点、分类或搜索影片，打开详情，选择线路与剧集播放。
+3. 播放时可选集、上下集和开启自动连播；按 **N / P** 切换下一集 / 上一集。
+4. 选择 **直播**，选择直播源、分组或搜索频道。播放中可上下台、多线路换线，**N / P** 同样适用。
+
+配置自动保存到本机用户数据目录，升级后保留。配置仓可在导入后选择子配置；单独的 M3U / TXT / JSON 频道列表也可直接导入。
+
+**兼容范围：**通用 XML / JSON 采集接口、CatVod HTTP API（type 4），以及已移植的 FTY `T4`、`Dm84`、`Auete`、`FirstAid` 适配器。对本次验证的饭太硬配置，49 个点播站点中 **5 个已适配**：光影、奶酪、动漫巴士、奥特、急救。其余 Android 私有插件和 drpy 脚本在列表中标为「待适配」，不会假装可用。
+
+程序不包含 Android JAR、DEX、ARM 原生插件，不执行订阅里的任意脚本，也不预置内容订阅。源站更新、接口风控和失效频道仍可能导致个别线路不可用。详见[源格式、适配范围与开发接口](docs/CONTENT_SOURCES.md)。
 
 ### 关闭与后台运行
 
@@ -229,9 +244,10 @@ npm run test:installer
 ```powershell
 npm test
 npm run test:buffering
+npm run test:library:browser
 ```
 
-`npm test` 包含播放器路由/快捷键/故障恢复、代理断连、缓存边界、影视兼容、DLNA/SSDP、AirPlay 模拟和媒体 Range 测试。`test:buffering` 需要 Windows、Edge 和 FFmpeg，会创建独立无头浏览器，生成测试媒体，验证提前缓冲、8 秒源站断流及转封装后拖动进度。
+`npm test` 包含播放器路由/快捷键/故障恢复、代理断连、缓存边界、独立点播与直播、HTML 适配器、影视投屏兼容、DLNA/SSDP、AirPlay 模拟和媒体 Range 测试。`test:buffering` 与 `test:library:browser` 需要 Windows、Edge 和 FFmpeg，会创建独立无头浏览器；后者验证配置导入、分类详情、带请求头的真实 HLS 播放、自动连播与换台，默认只访问本地测试源。
 
 协议模拟成功不代表已经覆盖所有品牌手机和商业视频 App。新客户端兼容问题欢迎附上经过脱敏的诊断信息反馈。
 
@@ -241,6 +257,7 @@ npm run test:buffering
 public/                 电脑接收界面、手机遥控页和播放器
 src/
   server.js             HTTP / WebSocket 服务入口
+  content/              Node.js 点播、直播、配置解码与站点适配
   protocols/            DLNA、基础 AirPlay、影视 HTTP 协议
   services/             播放状态、媒体代理、分片缓存
   utils/                网卡选择、设备标识、数据目录
@@ -302,7 +319,7 @@ docs/images/            README 演示截图
 Release 中提供 `SHA256SUMS.txt`，可核对下载附件：
 
 ```powershell
-Get-FileHash .\MobileTV-1.0.2-Setup-x64.exe -Algorithm SHA256
+Get-FileHash .\MobileTV-1.1.0-Setup-x64.exe -Algorithm SHA256
 ```
 
 安装程序暂未配置商业代码签名。请从本仓库正式 Release 获取文件并核对校验和。

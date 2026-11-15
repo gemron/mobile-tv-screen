@@ -72,7 +72,7 @@ async function main() {
   console.log('PASS: compiled launcher starts bundled Node, with an independent user data directory');
   execFileSync(executable, args, { env, cwd: sandbox, windowsHide: true, timeout: 10000 });
   assert.equal(child.exitCode, null, 'Duplicate launch keeps the original instance alive');
-  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
+  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/css/library.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/js/library.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
     const response = await request(file);
     assert.ok((await response.arrayBuffer()).byteLength > 0, file);
   }
@@ -82,6 +82,8 @@ async function main() {
   // with cacheable VOD segments, as a real phone or CDN would supply them.
   cacheOrigin = http.createServer((req, res) => {
     res.setHeader('Cache-Control', 'public, max-age=120');
+    if (req.url === '/config') { res.end(JSON.stringify({ sites: [{ key: 'test', name: 'Packaged CMS', type: 1, api: '/cms' }], lives: [{ name: 'Packaged live', channels: [{ name: 'Test channel', url: '/release-cache.m3u8' }] }] })); return; }
+    if (req.url.startsWith('/cms')) { res.end(JSON.stringify({ class: [{ type_id: '1', type_name: 'Test' }], list: [{ vod_id: '1', vod_name: 'Package test', vod_play_from: 'HLS', vod_play_url: 'One$/release-cache.m3u8' }] })); return; }
     if (req.url.endsWith('.m3u8')) {
       res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
       res.end('#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nrelease-cache.ts\n#EXT-X-ENDLIST\n');
@@ -89,6 +91,15 @@ async function main() {
   });
   await new Promise(resolve => cacheOrigin.listen(0, '127.0.0.1', resolve));
   const originBase = `http://127.0.0.1:${cacheOrigin.address().port}`;
+  const library = await (await request('/api/library/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: originBase + '/config' }) })).json();
+  assert.equal(library.sites[0].supported, true);
+  assert.equal((await (await request('/api/library/home?site=test')).json()).list[0].title, 'Package test');
+  const libraryPlay = await (await request('/api/library/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ siteKey: 'test', vodId: '1' }) })).json();
+  assert.equal(libraryPlay.state.protocol, 'Library');
+  const channels = await (await request('/api/library/channels?source=' + library.lives[0].key)).json();
+  assert.equal(channels.channels.length, 1);
+  assert.ok(fs.existsSync(path.join(data, 'library-config.json')));
+  console.log('PASS: packaged native library imports, persists, browses, resolves playback and lists live channels without Android');
   const proxyRoute = file => '/api/proxy?url=' + encodeURIComponent(originBase + '/' + file);
   await (await request(proxyRoute('release-cache.m3u8'))).text();
   assert.deepEqual(Buffer.from(await (await request(proxyRoute('release-cache.ts'))).arrayBuffer()), cachedSegment);

@@ -7,6 +7,7 @@ const { spawn } = require('child_process');
 const express = require('express');
 const castState = require('./castState');
 const { SegmentCache } = require('./segmentCache');
+const mediaHeaders = require('./mediaHeaders');
 
 // Persistent HTTP/HTTPS connection pools eliminate repeated TCP/TLS handshakes across HLS segments and Range seeks
 const httpAgent = new http.Agent({
@@ -124,7 +125,10 @@ async function openUpstreamStream(targetUrl, reqHeaders, maxRedirects = 5, signa
   }
   if ([301, 302, 303, 307, 308].includes(opened.upRes.statusCode) && opened.upRes.headers.location && maxRedirects > 0) {
     opened.upRes.resume();
-    return openUpstreamStream(new URL(opened.upRes.headers.location, targetUrl).href, reqHeaders, maxRedirects - 1, signal, attempt);
+    const next = new URL(opened.upRes.headers.location, targetUrl);
+    const redirectHeaders = { ...reqHeaders };
+    if (next.origin !== new URL(targetUrl).origin) for (const name of Object.keys(redirectHeaders)) if (/^(authorization|cookie)$/i.test(name)) delete redirectHeaders[name];
+    return openUpstreamStream(next.href, redirectHeaders, maxRedirects - 1, signal, attempt);
   }
   if (attempt < 1 && !signal?.aborted && [408, 429, 500, 502, 503, 504].includes(opened.upRes.statusCode)) {
     opened.upRes.destroy();
@@ -138,8 +142,8 @@ async function openUpstreamStream(targetUrl, reqHeaders, maxRedirects = 5, signa
  * Rewrite M3U8 playlist URIs (segments, variant playlists, #EXT-X-KEY, #EXT-X-MAP)
  * so all nested fetches flow seamlessly through /api/proxy.
  */
-function rewriteM3u8(content, baseUrl, explicitReferer = '') {
-  const refParam = explicitReferer ? `&referer=${encodeURIComponent(explicitReferer)}` : '';
+function rewriteM3u8(content, baseUrl, explicitReferer = '', headerContext = '') {
+  const refParam = (explicitReferer ? `&referer=${encodeURIComponent(explicitReferer)}` : '') + (headerContext ? `&headerContext=${encodeURIComponent(headerContext)}` : '');
   const toProxyUrl = (rawUri) => {
     const abs = new URL(rawUri, baseUrl).toString();
     return `/api/proxy?url=${encodeURIComponent(abs)}${refParam}`;
@@ -199,12 +203,15 @@ function createProxyRouter(options = {}) {
   router.get('/proxy', async (req, res) => {
     const targetUrl = String(req.query.url || '').trim();
     const explicitReferer = String(req.query.referer || '').trim();
+    const headerContext = String(req.query.headerContext || '');
+    const customHeaders = headerContext ? mediaHeaders.get(headerContext) : {};
+    if (!customHeaders) { res.status(410).json({ error: '播放请求头已过期，请重新选择节目' }); return; }
     if (!targetUrl) {
       res.status(400).json({ error: 'Missing url parameter' });
       return;
     }
 
-    const upstreamHeaders = resolveUpstreamHeaders(targetUrl, explicitReferer);
+    const upstreamHeaders = { ...Object.fromEntries(Object.entries(resolveUpstreamHeaders(headerContext ? '' : targetUrl, explicitReferer)).map(([key, value]) => [key.toLowerCase(), value])), ...customHeaders };
     if (req.headers.range) {
       upstreamHeaders.Range = req.headers.range;
     }
@@ -229,7 +236,8 @@ function createProxyRouter(options = {}) {
     req.once('aborted', cleanupUpstream);
     res.once('close', cleanupUpstream);
     if (clientClosed) return;
-    const cacheKey = cache.key(targetUrl, explicitReferer);
+    const cacheScope = explicitReferer + (headerContext ? '\n' + headerContext : '');
+    const cacheKey = cache.key(targetUrl, cacheScope);
     const cacheable = req.method === 'GET' && !req.headers.range && !req.headers['if-range'] && cache.eligible(cacheKey);
     if (cacheable) {
       let entry = cache.get(cacheKey);
@@ -286,8 +294,8 @@ function createProxyRouter(options = {}) {
       upRes.on('end', () => {
         if (clientClosed || res.destroyed || res.headersSent) return;
         const bodyText = Buffer.concat(chunks).toString('utf8');
-        cache.registerPlaylist(bodyText, finalUrl, explicitReferer);
-        const rewritten = rewriteM3u8(bodyText, finalUrl, explicitReferer);
+        cache.registerPlaylist(bodyText, finalUrl, cacheScope);
+        const rewritten = rewriteM3u8(bodyText, finalUrl, explicitReferer, headerContext);
         res.status(upRes.statusCode || 200);
         res.set({
           'Content-Type': 'application/vnd.apple.mpegurl; charset=utf-8',
@@ -340,6 +348,9 @@ function createProxyRouter(options = {}) {
   router.get('/transcode', (req, res) => {
     const targetUrl = String(req.query.url || '').trim();
     const explicitReferer = String(req.query.referer || '').trim();
+    const headerContext = String(req.query.headerContext || '');
+    const customHeaders = headerContext ? mediaHeaders.get(headerContext) : {};
+    if (!customHeaders) { res.status(410).end('播放请求已过期，请重新选择节目'); return; }
     const reencode = req.query.reencode === '1';
     const startPosition = Math.max(0, Math.min(7 * 24 * 3600, Number(req.query.start) || 0));
 
@@ -348,7 +359,7 @@ function createProxyRouter(options = {}) {
       return;
     }
 
-    const headers = resolveUpstreamHeaders(targetUrl, explicitReferer);
+    const headers = { ...Object.fromEntries(Object.entries(resolveUpstreamHeaders(headerContext ? '' : targetUrl, explicitReferer)).map(([key, value]) => [key.toLowerCase(), value])), ...customHeaders };
     const headerLines = Object.entries(headers)
       .map(([k, v]) => `${k}: ${v}`)
       .join('\r\n') + '\r\n';
@@ -443,4 +454,5 @@ module.exports = {
   createProxyRouter,
   rewriteM3u8,
   resolveUpstreamHeaders,
+  openUpstreamStream,
 };

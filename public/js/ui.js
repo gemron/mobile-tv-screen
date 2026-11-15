@@ -48,7 +48,7 @@
     drawer.classList.toggle('open', open);
     drawer.setAttribute('aria-hidden', String(!open));
     $('logBackdrop').hidden = !open;
-    for (const element of [$('standbyView'), $('playerStage'), document.querySelector('.topbar')]) {
+    for (const element of [$('standbyView'), $('libraryView'), $('playerStage'), document.querySelector('.topbar')]) {
       if (element) element.inert = open;
     }
     if (open) {
