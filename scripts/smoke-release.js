@@ -51,7 +51,7 @@ async function main() {
       compared++;
     }
   }
-  for (const file of ['README.md', 'CHANGELOG.md', 'app/package.json', 'app/package-lock.json']) assert.ok(fs.readFileSync(path.join(root, file.replace(/^app\//, ''))).equals(fs.readFileSync(path.join(release, file))), file);
+  for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'CONTRIBUTING.md', 'app/package.json', 'app/package-lock.json']) assert.ok(fs.readFileSync(path.join(root, file.replace(/^app\//, ''))).equals(fs.readFileSync(path.join(release, file))), file);
   const buildInfo = JSON.parse(fs.readFileSync(path.join(release, 'build-info.json'), 'utf8'));
   assert.equal(buildInfo.sourceCommit, latest.sourceCommit);
   assert.equal(buildInfo.version, latest.version);

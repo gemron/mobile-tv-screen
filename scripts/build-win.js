@@ -101,6 +101,8 @@ async function main() {
   ].join('\r\n'));
   write(path.join(release, 'README-使用说明.txt'), '\ufeff' + [
     `MobileTV ${pkg.version} · Windows 64 位免安装版`, '',
+    '用途声明：仅供学习研究和非商业技术测试使用，禁止商业售卖。',
+    '第三方组件及历史 MIT 代码遵循各自许可证，详见 LICENSE 和 THIRD_PARTY_NOTICES.md。', '',
     '本版新增：多订阅切换、播放历史与收藏、电视式直播频道表、B站专用投屏（实验）。',
     '修复换集状态与厂长媒体解析；解析有加载、取消、超时及重试入口。',
     '夸克原文件按实际分辨率使用 32–256 MiB 有界缓冲，优化高分辨率播放及拖动音画同步。',

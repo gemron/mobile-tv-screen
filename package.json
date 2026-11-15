@@ -38,7 +38,7 @@
     "screen-mirror",
     "mediarenderer"
   ],
-  "license": "MIT",
+  "license": "SEE LICENSE IN LICENSE",
   "dependencies": {
     "acorn": "^8.19.0",
     "bonjour-service": "^1.3.0",

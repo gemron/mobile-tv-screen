@@ -1,21 +1,34 @@
-MIT License
+MobileTV 学习研究与非商业使用许可证 1.0
+MobileTV Research and Non-Commercial License 1.0
 
 Copyright (c) 2026 gemron and MobileTV contributors
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+本软件仅供学习、研究和非商业技术测试使用，禁止商业售卖。
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+一、适用范围
+本许可自 MobileTV 1.2.1 起，适用于著作权人有权按本许可提供的项目自有代码、
+文档及相应构建产物。第三方组件与此前已经按其他许可证授出的代码不因此改用
+本许可，具体例外见第五条。
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+二、允许的使用
+在遵守本许可的前提下，允许为学习、研究和非商业技术测试目的使用、复制、
+修改和免费分享本软件。分享原版或修改版时，应保留本许可、版权署名和用途声明，
+并明确标识修改内容。其他权利未在本许可中授予。
+
+三、禁止商业售卖
+未经相应著作权人另行书面授权，不得销售本软件的源码、安装包、便携包或修改版，
+不得通过付费下载、捆绑销售、付费授权或以本软件为核心的收费服务进行商业售卖。
+不得移除用途声明后将软件作为商业产品再次分发。
+
+四、使用责任与无担保
+使用者应自行确保有权访问和使用订阅、账号、媒体及其他内容。本许可不授予
+第三方内容、商标或服务的任何权利。软件按现状提供，不承诺可用性、兼容性或
+特定用途；在适用法律允许的范围内，著作权人及贡献者不承担使用所致损失。
+
+五、第三方组件与历史版本
+Node.js、FFmpeg、npm 依赖等独立第三方组件继续遵循各自许可证，本许可的
+非商业限制不适用于这些组件。许可及源码信息见 THIRD_PARTY_NOTICES.md。
+此前已经按 MIT 许可证发布的版本和代码仍保留原有 MIT 授权，本许可不撤回
+既有授权；历史文本保存在 docs/licenses/MIT-legacy.txt，原版可从 Git 标签取得。
+
+本许可为项目自定义的源码公开许可，不是 OSI 批准的开源许可证。

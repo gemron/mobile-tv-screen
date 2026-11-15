@@ -8,7 +8,7 @@
 
 [![Release](https://img.shields.io/github/v/release/gemron/mobile-tv-screen?label=Release)](https://github.com/gemron/mobile-tv-screen/releases/latest)
 [![CI](https://github.com/gemron/mobile-tv-screen/actions/workflows/ci.yml/badge.svg)](https://github.com/gemron/mobile-tv-screen/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: Research / Non-Commercial](https://img.shields.io/badge/License-Research%20%2F%20Non--Commercial-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)](https://github.com/gemron/mobile-tv-screen/releases/latest)
 
 [下载安装包](https://github.com/gemron/mobile-tv-screen/releases/latest) · [使用指南](#快速开始) · [常见问题](#常见问题) · [参与开发](CONTRIBUTING.md) · [反馈问题](https://github.com/gemron/mobile-tv-screen/issues)
@@ -18,6 +18,8 @@
 </div>
 
 MobileTV 在电脑上接收手机视频 App 的投屏请求，也能导入自己的订阅配置，在电脑上浏览分类、搜索影片、选集播放和观看直播，无需手机代解析。前端资源随程序分发，Windows 发行包包含 Node.js 和 FFmpeg，普通用户无需配置开发环境。
+
+> **用途声明：本软件仅供学习、研究和非商业技术测试使用，禁止商业售卖。** 不得将本项目自有软件或修改版用于付费下载、捆绑售卖或收费授权。使用媒体与账号应遵循相应权利人的授权；第三方组件及历史 MIT 代码按各自许可执行，详见 [LICENSE](LICENSE)。
 
 > 本项目主要提供**媒体投屏**。基础 AirPlay 不等于苹果「屏幕镜像」；Miracast 入口调用 Windows 系统设置。具体边界见[协议兼容性](#协议兼容性)。
 
@@ -207,7 +209,7 @@ Windows 发行版默认使用 `%LOCALAPPDATA%\MobileTV\data`：
 | `browser-chrome/` | Chrome 桌面播放窗口的独立配置，与 Edge 配置分开保存 |
 | 播放历史、状态和分片缓存 | 进程内存中保存，接收服务重启后清空 |
 
-源码启动默认使用项目根目录下的 `data/`。可以通过 `MOBILETV_DATA_DIR` 指定独立目录。开源仓库和发行包不包含开发电脑的设备配置、上传文件和日志。
+源码启动默认使用项目根目录下的 `data/`。可以通过 `MOBILETV_DATA_DIR` 指定独立目录。公开仓库和发行包不包含开发电脑的设备配置、上传文件和日志。
 
 ### 环境变量和启动参数
 
@@ -377,6 +379,8 @@ Get-FileHash .\MobileTV-1.1.0-Setup-x64.exe -Algorithm SHA256
 
 欢迎通过 [Issue](https://github.com/gemron/mobile-tv-screen/issues) 报告兼容问题，或提交聚焦的 Pull Request。提交前请阅读 [贡献指南](CONTRIBUTING.md)。安全问题请遵循 [安全说明](SECURITY.md)，不要公开包含访问凭据的媒体 URL 或日志。
 
-MobileTV 项目代码采用 [MIT License](LICENSE)。发行包中的 Node.js、FFmpeg 和 npm 依赖遵循各自许可证；FFmpeg 是单独运行的外部程序，并不因本项目使用 MIT 而改用 MIT。详见 [第三方组件说明](THIRD_PARTY_NOTICES.md) 和发行包内的 `licenses/`、`THIRD-PARTY-NOTICES.txt`。
+从 1.2.1 起，项目有权授权的自有代码采用[学习研究与非商业使用许可证](LICENSE)，源码公开，禁止商业售卖。由于限制商业用途，不将其称为 OSI 开源许可；参见 [OSI 开源定义](https://opensource.org/osd)。此前已按 [MIT](https://opensource.org/license/mit) 发布的版本与代码继续保留原授权，不能通过本次声明撤回；[历史 MIT 文本](docs/licenses/MIT-legacy.txt)。
+
+发行包中的 Node.js、FFmpeg 和 npm 依赖遵循各自许可证，项目的非商业限制不适用于这些独立组件。FFmpeg 是单独运行的外部程序。详见 [第三方组件说明](THIRD_PARTY_NOTICES.md) 和发行包内的 `licenses/`、`THIRD-PARTY-NOTICES.txt`。
 
 感谢 [Node.js](https://nodejs.org/)、[FFmpeg](https://ffmpeg.org/)、[hls.js](https://github.com/video-dev/hls.js)、[mpegts.js](https://github.com/xqq/mpegts.js)、[Express](https://expressjs.com/) 及其他开源依赖。
