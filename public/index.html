@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#f6f7f9" />
+  <title>MobileTV · 你的无线大屏</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%230c8777'/%3E%3Cpath d='M8 10h16v11H8zM12 25h8' fill='none' stroke='white' stroke-width='2'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="MobileTV 首页"><span class="brand-icon"><svg class="icon"><use href="/icons.svg#cast" /></svg></span><span><span class="brand-title" id="headerDeviceName">MobileTV</span><span class="brand-sub">你的无线大屏</span></span></a>
+    <div class="header-actions">
+      <span class="connection-status"><span class="dot" id="dotWs"></span><span id="lblWs">正在连接</span></span><span class="header-divider"></span>
+      <button class="icon-btn" id="btnTheme" title="切换浅色 / 深色" aria-label="切换浅色或深色主题"><svg class="icon theme-moon"><use href="/icons.svg#moon" /></svg><svg class="icon theme-sun"><use href="/icons.svg#sun" /></svg></button>
+      <button class="icon-btn" id="btnKeyboardHelp" title="键盘快捷键 (?)" aria-label="查看键盘快捷键"><svg class="icon"><use href="/icons.svg#keyboard" /></svg></button>
+      <button class="icon-btn" id="btnSettings" title="设备设置" aria-label="打开设备设置"><svg class="icon"><use href="/icons.svg#settings" /></svg></button>
+      <button class="btn btn-small" id="btnStandbyFullscreen" title="全屏 (F)"><svg class="icon"><use href="/icons.svg#fullscreen" /></svg><span>全屏</span></button>
+    </div>
+  </header>
+
+  <main class="standby-view" id="standbyView">
+    <section class="welcome"><div><p class="eyebrow">CONNECTED MOMENTS</p><h1>小屏内容，大屏享受<span class="accent-period">。</span></h1><p class="welcome-description">连接同一个 Wi-Fi，从手机发起投屏，或直接打开一个视频链接。</p></div><div class="welcome-symbol" aria-hidden="true"><svg class="icon"><use href="/icons.svg#cast" /></svg></div></section>
+    <div class="dashboard-grid">
+      <section class="card connect-card" aria-labelledby="connectTitle">
+        <div class="section-heading"><h2 id="connectTitle">扫码连接</h2><span class="chip" id="clientCountChip">等待手机连接</span></div>
+        <p class="section-description">手机浏览器扫一扫，即可投屏和遥控。</p>
+        <div class="qr-wrap"><div class="qr-frame"><img id="qrImg" alt="手机连接此大屏的二维码" width="200" height="200" /></div></div>
+        <div class="receiver-identity"><span class="mini-label">当前大屏</span><strong id="receiverName">MobileTV</strong><span class="network-line"><svg class="icon"><use href="/icons.svg#wifi" /></svg><span id="guideIpAndroid">正在获取地址</span><span class="network-tag">同一 Wi-Fi</span></span></div>
+        <div class="connection-link"><span class="qr-url" id="mobileUrlText">正在生成连接地址…</span><button class="icon-btn" id="btnCopyUrl" title="复制手机连接地址" aria-label="复制手机连接地址"><svg class="icon"><use href="/icons.svg#copy" /></svg></button></div>
+        <div class="protocol-status" aria-label="投屏服务状态"><span><i class="dot" id="dotDlna"></i><span id="lblDlna">DLNA</span></span><span><i class="dot" id="dotAirplay"></i><span id="lblAirplay">AirPlay</span></span><span><i class="dot" id="dotTvbox"></i><span id="lblTvbox">影视</span></span></div>
+      </section>
+      <div class="content-column">
+        <section class="card app-cast-card" aria-labelledby="appCastTitle"><div class="feature-icon"><svg class="icon"><use href="/icons.svg#cast" /></svg></div><div class="app-cast-content"><h2 id="appCastTitle">从视频 App 投屏</h2><p>打开视频，点击 <span class="tv-mark">TV</span> 投屏图标，选择这台大屏。</p><span class="supported-apps">腾讯视频 · 哔哩哔哩 · OK影视 · 支持 DLNA 的 App</span></div></section>
+        <section class="card link-cast-card" aria-labelledby="linkCastTitle"><div class="section-heading"><h2 id="linkCastTitle">链接投屏</h2><span class="mini-label">视频 / 直播 / 图片</span></div><div class="cast-bar"><span class="input-icon" aria-hidden="true"><svg class="icon"><use href="/icons.svg#link" /></svg></span><input class="input-box" id="quickUrlInput" type="url" aria-label="视频或图片链接" placeholder="粘贴视频或图片链接…" autocomplete="off" /><button class="btn btn-primary" id="btnQuickCast">开始投屏<svg class="icon"><use href="/icons.svg#arrow" /></svg></button></div><p class="field-hint">支持 MP4、M3U8、FLV 等媒体直链<span class="shortcut-hint"><kbd>Enter</kbd> 开始</span></p></section>
+        <section class="card history-card" aria-labelledby="historyTitle"><div class="section-heading"><h2 id="historyTitle">最近播放</h2><span class="mini-label" id="historyCountChip">0 条记录</span></div><div class="history-list" id="historyList"><div class="empty-state"><svg class="icon"><use href="/icons.svg#clock" /></svg><p>还没有播放记录</p><span>你的下一次大屏体验，从这里开始。</span></div></div></section>
+      </div>
+    </div>
+    <details class="connection-help"><summary><svg class="icon"><use href="/icons.svg#phone" /></svg><span>连接帮助</span><span class="help-summary">Android、iPhone 与屏幕镜像</span><svg class="icon chevron"><use href="/icons.svg#chevron" /></svg></summary><div class="guides-grid">
+      <article><h3>Android / OK影视</h3><p>在视频播放页点击 TV，选择 <strong id="guideNameAndroid">这台大屏</strong>。也可扫码上传手机文件。</p><p class="hint">Android 17 请允许发送 App 访问“附近设备 / 本地网络”；旧版本没有权限入口时，先更新 App。</p></article>
+      <article><h3>iPhone / iPad</h3><p>支持 DLNA 的 App 可选择 <strong id="guideNameApple">这台大屏</strong>；基础 AirPlay 视频请选择带“AirPlay”后缀的设备。</p><p class="hint">AirPlay 尚未经过苹果真机验证，暂不支持控制中心屏幕镜像、音频输出和受保护的视频。</p></article>
+      <article><h3>整个手机屏幕</h3><p>Android 可使用 Windows 无线显示器。网页屏幕与相机共享需要浏览器和安全连接支持。</p><button class="text-button" id="btnMiracast">打开 Windows 无线显示器<svg class="icon"><use href="/icons.svg#arrow" /></svg></button></article>
+    </div></details>
+    <footer class="page-footer"><span><svg class="icon"><use href="/icons.svg#wifi" /></svg>本地连接，轻松分享</span><button class="text-button" id="btnOpenLogs">连接诊断<svg class="icon"><use href="/icons.svg#chevron" /></svg></button></footer>
+  </main>
+
+  <section class="player-stage" id="playerStage" tabindex="-1" aria-label="大屏播放器">
+    <div class="media-viewport" id="mediaViewport"><video id="tvVideo" playsinline preload="auto" crossorigin="anonymous"></video><video id="tvMirrorVideo" playsinline autoplay muted></video><img id="tvImage" alt="投屏图片" /><div class="audio-stage" id="audioStage"><div class="audio-disc"><svg class="icon"><use href="/icons.svg#volume" /></svg></div><h2 id="audioTitle">音频投屏中</h2><p id="audioArtist"></p></div><div class="buffering-pill" id="bufferingPill" role="status">正在加载内容…</div></div>
+    <div class="player-top-hud"><div class="hud-title-wrap"><div class="hud-title" id="hudTitle">正在播放</div><div class="hud-subtitle" id="hudSubtitle">来自手机的投屏</div></div><button class="btn player-stop" id="btnStopCast">结束投屏<svg class="icon"><use href="/icons.svg#close" /></svg></button></div>
+    <div class="player-bottom-hud"><div class="seek-row" id="seekRow"><span class="time-label" id="lblCurrentTime">00:00</span><input class="seek-slider" id="seekSlider" aria-label="播放进度" type="range" min="0" max="100" step="0.5" value="0" /><span class="time-label" id="lblDuration">00:00</span></div>
+      <div class="controls-row"><div class="controls-group"><button class="btn" id="btnRewind15" title="后退 15 秒"><svg class="icon"><use href="/icons.svg#rewind" /></svg>15</button><button class="btn btn-primary player-play" id="btnPlayPause" title="播放 / 暂停 (空格)">暂停</button><button class="btn" id="btnForward15" title="前进 15 秒">15<svg class="icon"><use href="/icons.svg#forward" /></svg></button><span class="control-divider"></span><button class="btn" id="btnMute" title="静音 (M)">静音</button><input id="volumeSlider" aria-label="音量" type="range" min="0" max="100" value="80" /></div>
+      <div class="controls-group"><select class="hud-select" id="selectRate" aria-label="播放速度"><option value="0.75">0.75×</option><option value="1" selected>1.0×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2.0×</option></select>
+        <details class="player-options" id="playerOptions"><summary class="btn" title="播放设置"><svg class="icon"><use href="/icons.svg#settings" /></svg><span>设置</span></summary><div class="player-options-panel"><h3>播放设置</h3><label for="selectStreamMode">连接方式</label><select class="hud-select" id="selectStreamMode"><option value="auto">自动选择（推荐）</option><option value="direct">直接连接</option><option value="proxy">通过电脑转发</option><option value="transcode">格式兼容（保留视频）</option></select><div class="options-buttons"><button class="btn" id="btnRotate">旋转 0°</button><button class="btn" id="btnFitMode">比例：适应</button><button class="btn" id="btnSnapshot">截取画面</button><button class="btn" id="btnPip">画中画</button></div><div class="resolution-readout"><span>实际分辨率</span><strong id="videoResolution">等待视频数据</strong></div><p class="quality-note">清晰度取决于视频源，连接方式不提高分辨率。</p><div class="player-diagnostics"><span id="metricProto">--</span><span id="metricPerf">正在获取播放状态</span></div><button class="text-button" id="btnHudLogs">查看连接诊断<svg class="icon"><use href="/icons.svg#arrow" /></svg></button></div></details>
+        <button class="btn" id="btnFullscreen" title="全屏 (F)"><svg class="icon"><use href="/icons.svg#fullscreen" /></svg><span>全屏</span></button></div></div>
+    </div>
+  </section>
+
+  <dialog class="app-dialog" id="settingsDialog" aria-labelledby="settingsTitle"><div class="dialog-heading"><div><span class="eyebrow">MAKE IT YOURS</span><h2 id="settingsTitle">设备设置</h2></div><button class="icon-btn" id="btnCloseSettings" aria-label="关闭设备设置"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div><label class="field-label" for="deviceNameInput">大屏名称</label><div class="device-name-row"><input class="input-box" id="deviceNameInput" type="text" maxlength="40" placeholder="为大屏起个名字" /><button class="btn btn-primary" id="btnSaveName">保存</button></div><label class="field-label" for="ipSelect">连接网络</label><select class="input-box network-select" id="ipSelect" title="选择局域网网卡"></select><p class="field-hint">选择与手机处于同一 Wi-Fi 的网络地址。</p><div class="settings-tests"><h3>连接检测</h3><p>播放一段本地示例，检查播放器是否正常。</p><div class="quick-actions"><button class="btn" id="btnTestDlna">测试 DLNA</button><button class="btn" id="btnTestAirplay">测试 AirPlay</button></div></div></dialog>
+  <dialog class="app-dialog keyboard-dialog" id="keyboardDialog" aria-labelledby="keyboardTitle"><div class="dialog-heading"><div><span class="eyebrow">AT YOUR FINGERTIPS</span><h2 id="keyboardTitle">键盘快捷键</h2></div><button class="icon-btn" id="btnCloseKeyboard" aria-label="关闭快捷键帮助"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div><div class="shortcut-list"><div><span>播放 / 暂停</span><span><kbd>Space</kbd> <kbd>K</kbd></span></div><div><span>后退 / 前进 10 秒</span><span><kbd>←</kbd> <kbd>→</kbd></span></div><div><span>调节音量</span><span><kbd>↓</kbd> <kbd>↑</kbd></span></div><div><span>静音 / 取消静音</span><kbd>M</kbd></div><div><span>进入 / 退出全屏</span><kbd>F</kbd></div><div><span>收起面板 / 退出全屏</span><kbd>Esc</kbd></div><div><span>查看快捷键</span><kbd>?</kbd></div></div><p class="field-hint">Tab 切换操作，Enter 确认。播放快捷键在投屏时生效。</p></dialog>
+  <button class="log-backdrop" id="logBackdrop" aria-label="关闭连接诊断" hidden></button><aside class="log-drawer" id="logDrawer" role="dialog" aria-modal="true" aria-hidden="true" aria-label="连接诊断"><div class="log-header"><div><span class="eyebrow">CONNECTION</span><h2>连接诊断</h2></div><button class="icon-btn" id="btnCloseLogs" aria-label="关闭连接诊断"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div><div class="log-body" id="logBody"></div></aside>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script src="/js/ui.js"></script><script src="/vendor/hls/hls.min.js"></script><script src="/vendor/mpegts/mpegts.js"></script><script src="/js/tv.js"></script>
+</body>
+</html>

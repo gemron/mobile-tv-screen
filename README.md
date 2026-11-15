@@ -1,0 +1,318 @@
+<div align="center">
+
+# MobileTV
+
+**让 Windows 电脑成为手机的局域网投屏接收端。**
+
+DLNA / 影视投屏 · 基础 AirPlay · 网页遥控 · 键盘操作 · 离线播放器资源
+
+[![Release](https://img.shields.io/github/v/release/gemron/mobile-tv-screen?label=Release)](https://github.com/gemron/mobile-tv-screen/releases/latest)
+[![CI](https://github.com/gemron/mobile-tv-screen/actions/workflows/ci.yml/badge.svg)](https://github.com/gemron/mobile-tv-screen/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Windows-10%20%2F%2011-0078d4)](https://github.com/gemron/mobile-tv-screen/releases/latest)
+
+[下载安装包](https://github.com/gemron/mobile-tv-screen/releases/latest) · [使用指南](#快速开始) · [常见问题](#常见问题) · [参与开发](CONTRIBUTING.md) · [反馈问题](https://github.com/gemron/mobile-tv-screen/issues)
+
+</div>
+
+MobileTV 在电脑上接收手机视频 App 的投屏请求，也提供手机浏览器遥控、媒体链接推送和本地文件上传。前端资源随程序分发，Windows 发行包包含 Node.js 和 FFmpeg，普通用户无需配置开发环境。
+
+> 本项目主要提供**媒体投屏**。基础 AirPlay 不等于苹果「屏幕镜像」；Miracast 入口调用 Windows 系统设置。具体边界见[协议兼容性](#协议兼容性)。
+
+## 界面预览
+
+### 电脑接收端
+
+![MobileTV 电脑接收端](docs/images/desktop.png)
+
+### 手机遥控端
+
+<img src="docs/images/mobile.png" alt="MobileTV 手机遥控端" width="360" />
+
+截图中的设备名称、地址和状态使用演示数据。
+
+## 功能亮点
+
+- **视频 App 投屏**：DLNA/UPnP 设备发现、播放、暂停、拖动进度和音量控制；提供影视类 App 的 HTTP 设备发现与投屏兼容接口。
+- **浏览器遥控**：扫描电脑界面二维码，使用手机推送媒体链接、上传视频/音频/图片、控制播放和切换显示方式。
+- **实用播放器**：全屏、倍速、静音、旋转、适应/填充/拉伸、截图、浏览器支持时的画中画，以及实际解码分辨率、FPS、缓冲秒数显示。
+- **键盘优先**：空格播放暂停、方向键快进快退和调节音量；输入框、原生控件和弹窗保留各自的键盘行为。
+- **缓冲与恢复**：HLS 点播目标前向缓冲 60 秒、最多约 90 秒；接收端具有 64 MiB 有上限的分片缓存、重复请求合并、短时网络重试和播放进度恢复。
+- **本地体验**：浅色/深色主题、设备名称与网卡选择、连接诊断、内置测试视频、托盘运行、单实例启动。
+- **可维护**：协议模拟测试、代理断连与缓存测试、真实 Edge 浏览器缓冲测试、Windows 成品验证脚本，以及安装版和便携版构建工具。
+
+## 快速开始
+
+### Windows 安装版
+
+1. 打开 [Releases](https://github.com/gemron/mobile-tv-screen/releases/latest)，下载 `MobileTV-<版本>-Setup-x64.exe`。
+2. 运行安装程序。默认安装到当前用户的 `%LOCALAPPDATA%\Programs\MobileTV`，无需管理员权限。
+3. 从开始菜单启动 **MobileTV**，电脑会打开接收界面。
+4. 让手机与电脑连接同一局域网；如 Windows 防火墙询问联网权限，允许在**专用网络**中通信。
+5. 在视频 App **播放页**点 TV/投屏，选择电脑界面显示的设备名称。
+
+安装程序支持简体中文和英文，可选桌面快捷方式。升级前先退出旧版托盘；卸载只移除程序，保留独立的用户数据目录。
+
+### Windows 免安装版
+
+下载同一 Release 中的 `MobileTV-<版本>-win-x64-<构建时间>.zip`，**完整解压**，双击 `MobileTV.exe`。
+
+请保留 EXE 旁边的 `app`、`runtime` 和 `tools` 文件夹。便携包无需安装，但运行数据仍保存在用户目录，方便升级时保留配置。
+
+### 手机网页投屏
+
+用手机浏览器扫描电脑界面的二维码，打开网页遥控端：
+
+| 入口 | 用途 |
+| --- | --- |
+| 遥控 | 播放、暂停、进度、音量、显示选项 |
+| 链接 | 推送手机或网络上的可访问媒体 URL |
+| 文件 | 上传手机本地视频、音频或图片并播放 |
+| 共享 | 浏览器支持且满足安全上下文要求时，使用 WebRTC 共享屏幕或摄像头 |
+
+媒体链接需要指向可播放的资源；普通网页地址、需要网页登录的页面和受 DRM 保护的视频不保证可用。网络媒体仍需要正常的源站连接。
+
+### 关闭与后台运行
+
+关闭浏览器接收窗口后，托盘服务会继续运行。双击托盘图标可重新打开界面；右键托盘图标，选择 **退出 MobileTV**，可结束本程序启动的 Node.js 和 FFmpeg 后台进程。
+
+如果启动时已经存在接收服务，启动器可能复用它。更新程序后仍显示旧行为时，请同时退出旧版后台或开发版服务，再启动新版。
+
+## 协议兼容性
+
+| 方式 | 支持范围 | 条件与限制 |
+| --- | --- | --- |
+| DLNA / UPnP | SSDP 发现、设备描述、AVTransport / RenderingControl 播放控制 | 发送端实现和媒体编码会影响兼容性 |
+| 影视 / TVBox HTTP | HTTP 设备发现、扫码辅助发现、接收手机已解析媒体地址与播放控制 | 依赖发送端兼容相应接口；本机设备名可能附带「影视」后缀 |
+| AirPlay | 传统 HTTP 视频、HLS、照片与基本进度控制 | **不支持**苹果屏幕镜像、RAOP 音频、FairPlay / DRM；目前主要通过协议模拟测试，尚未完成苹果真机兼容性验证 |
+| WebCast | 网页媒体链接、文件上传、网页遥控 | 需要浏览器支持媒体编码，或使用 FFmpeg 转封装 |
+| WebRTC | 屏幕/相机采集和局域网信令转发 | 属于实验功能；普通手机 HTTP 局域网页面通常不满足采集所需的 HTTPS 安全上下文，移动浏览器也可能不支持屏幕采集 |
+| Miracast | 一键打开 Windows「投影到此电脑」设置 | 实际接收由 Windows 无线显示功能、网卡和系统组件提供，MobileTV 本身不实现 Miracast 协议栈 |
+
+项目与腾讯视频、OK影视、Apple、Microsoft 等服务或品牌无隶属关系；App 名称仅用于兼容性说明。
+
+## 画质、传输模式与缓冲
+
+### 传输模式
+
+| 模式 | 行为 | 建议 |
+| --- | --- | --- |
+| 智能代理（推荐） | 跨来源媒体通过电脑代理，HLS 子清单和分片地址同步重写 | 日常使用的默认模式，适合手机媒体服务未提供 CORS 的情况 |
+| 极速直连 | 浏览器直接读取原始媒体地址 | 源站允许浏览器访问且兼容性良好时使用 |
+| 强制防盗链代理 | 强制经过本机代理，按常见源站附带请求头 | 对部分来源有帮助，不保证绕过鉴权或所有防盗链机制 |
+| FFmpeg 转封装 | 将输入整理为浏览器可播放的 fragmented MP4；默认复制视频码流，音频可转换为 AAC | 用于部分容器兼容问题；不是任意编码的万能解码方案 |
+
+代理和视频码流复制不会提高源视频清晰度，也不会把低分辨率视频变成真实高清。播放器展示的分辨率来自视频解码结果。默认界面不会请求有损的视频重编码；源站提供多档 HLS 时，播放器仍可能根据网络条件选择档位。
+
+### 缓存策略
+
+- HLS 点播前向缓冲目标为 **60 秒**，低码率时最多约 **90 秒**，保留约 **30 秒**已播放数据便于回退。
+- 直播使用较短的前向缓冲窗口，避免照搬点播缓存造成明显直播延迟。
+- 接收端完整 HLS 分片缓存上限为 **64 MiB**，单分片最多 **16 MiB**，同时最多 4 个缓存填充任务；默认有效期最多 120 秒，并按源站缓存策略缩短或禁用复用。
+- 同一分片的并发请求可共用一次下载；不完整或超限的数据不会进入缓存。直播资源、加密密钥、字节范围资源及要求不缓存的响应不会作为普通点播分片复用。
+- 内存缓存与播放器缓冲是两层机制。64 MiB 不是整个程序的内存占用上限，浏览器、解码器和运行时还会使用内存。
+- 普通 MP4 等媒体保持流式转发和 Range 拖动支持，不会为了缓存先下载整部影片。
+
+测试曾在合成 HLS 视频提前缓冲约 56 秒后，模拟源站连续不可用 8 秒，观察到播放继续推进且没有新增 `waiting` 事件。这个结果验证短时断流缓冲行为，**不能保证所有网络、片源和设备都不会卡顿**；持续低于视频码率的带宽仍会耗尽缓冲。
+
+## 键盘快捷键
+
+| 按键 | 操作 |
+| --- | --- |
+| `Space` / `K` | 播放 / 暂停 |
+| `←` / `→` | 快退 / 快进 10 秒 |
+| `↑` / `↓` | 音量调整 5% |
+| `M` | 静音 / 恢复声音 |
+| `F` | 进入 / 退出全屏 |
+| `?` | 打开快捷键帮助 |
+| `Esc` | 关闭当前面板或按浏览器行为退出全屏 |
+
+快捷键在文本输入框和选择框中不会接管输入；浏览器自身快捷键仍然有效。
+
+## 配置、端口与数据
+
+### 默认端口
+
+| 端口 | 用途 |
+| --- | --- |
+| TCP `8080` | 电脑界面、手机遥控、HTTP API、WebSocket、媒体代理 |
+| TCP `7000` | 基础 AirPlay HTTP 接收；绑定失败时会记录诊断信息 |
+| TCP `9978` | 影视 / TVBox HTTP 设备发现与投屏 |
+| UDP `1900` | DLNA / SSDP 局域网设备发现 |
+| UDP `5353` | AirPlay mDNS / Bonjour 发现，由相关库使用 |
+
+这些服务面向可信局域网。当前没有用户登录、设备配对或公网访问鉴权；请勿将端口直接映射到公网，详见 [SECURITY.md](SECURITY.md)。
+
+### 用户数据
+
+Windows 发行版默认使用 `%LOCALAPPDATA%\MobileTV\data`：
+
+| 内容 | 保存方式 |
+| --- | --- |
+| `device-config.json` | 设备名称、UUID、MAC 标识；首次运行生成 |
+| `uploads/` | 上传文件；每次上传完成后清理到最近 12 个文件，单文件上限 2 GiB |
+| `sample-test.mp4` | 按需生成的本地诊断视频 |
+| `logs/` | Windows 启动器的运行日志 |
+| `browser/` | 桌面接收窗口使用的独立浏览器配置 |
+| 播放历史、状态和分片缓存 | 进程内存中保存，接收服务重启后清空 |
+
+源码启动默认使用项目根目录下的 `data/`。可以通过 `MOBILETV_DATA_DIR` 指定独立目录。开源仓库和发行包不包含开发电脑的设备配置、上传文件和日志。
+
+### 环境变量和启动参数
+
+| 配置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `PORT` | `8080` | 源码服务的主 HTTP 端口 |
+| `AIRPLAY_PORT` | `7000` | 基础 AirPlay 端口 |
+| `TVBOX_PORT` | `9978` | 影视兼容端口 |
+| `MOBILETV_DATA_DIR` | 见上文 | 配置、上传与日志数据目录 |
+| `NO_OPEN=1` | 未设置 | 源码运行时不自动打开浏览器 |
+| `DISABLE_DLNA=1` | 未设置 | 禁用 DLNA 发现与接收服务 |
+| `DISABLE_AIRPLAY=1` | 未设置 | 禁用基础 AirPlay 服务 |
+| `DISABLE_TVBOX=1` | 未设置 | 禁用影视兼容服务 |
+| `CAST_DIAGNOSTICS=1` | 未设置 | 输出影视请求诊断信息，排障后建议关闭 |
+
+Windows 启动器参数：
+
+```powershell
+.\MobileTV.exe --port 8080
+.\MobileTV.exe --no-window
+.\MobileTV.exe --quit --port 8080
+```
+
+启动器通过 `--port` 选择主端口，未指定时使用 8080；修改 `PORT` 环境变量主要适用于直接运行 Node.js 源码。影视 App 的默认端口探测逻辑可能固定，修改 9978 前请确认发送端支持。
+
+## 从源码运行
+
+推荐使用 **Node.js 24 LTS** 和可通过 `PATH` 调用的 FFmpeg。Windows 桌面发行版针对 Windows 10 2004 及以上、Windows 11 x64 构建；其他系统可以自行尝试 Node.js 服务，但没有对应的桌面安装包与同等验证范围。
+
+```powershell
+git clone https://github.com/gemron/mobile-tv-screen.git
+cd mobile-tv-screen
+npm ci
+npm start
+```
+
+打开 `http://127.0.0.1:8080/`。开发时可以使用 `npm run dev`。如果无需 AirPlay 或影视接收，可设置对应禁用变量后启动。
+
+```powershell
+$env:NO_OPEN = '1'
+$env:MOBILETV_DATA_DIR = 'D:\MobileTV-data'
+npm start
+```
+
+## 构建与验证
+
+### Windows 发行构建
+
+本仓库提供固定版本构建工具准备脚本，下载后验证 SHA-256。Inno Setup 以便携模式放在 `build/tools/` 中，不会添加系统安装项。
+
+```powershell
+npm ci
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-build-tools.ps1
+npm test
+npm run build:win
+npm run build:installer
+npm run test:release -- --zip
+npm run test:installer
+```
+
+- `build:win`：使用当前 x64 Node.js、生产依赖和 FFmpeg 生成便携目录、ZIP、SHA-256 文件与 `dist/latest-release.json`。
+- `build:installer`：从最新便携目录编译当前用户安装版 EXE，同时生成发布附件校验清单。
+- `test:release`：使用已编译 EXE 验证启动、独立数据目录、离线资源、分片缓存、Range、FFmpeg、控制和退出；`--zip` 会先验证校验和并解压到含中文和空格的临时路径。
+- `test:installer`：在临时目录静默安装、运行成品验证并卸载，不使用正常的用户数据目录。
+
+如已自行安装工具，可以通过 `FFMPEG_PATH` 指定 `ffmpeg.exe`，通过 `ISCC_PATH` 指定 Inno Setup 7 的 `ISCC.exe`。FFmpeg 所在发行目录应包含相应 `LICENSE` 与 `README.txt`。
+
+### 测试命令
+
+```powershell
+npm test
+npm run test:buffering
+```
+
+`npm test` 包含播放器路由/快捷键/故障恢复、代理断连、缓存边界、影视兼容、DLNA/SSDP、AirPlay 模拟和媒体 Range 测试。`test:buffering` 需要 Windows、Edge 和 FFmpeg，会创建独立无头浏览器，生成测试媒体，验证提前缓冲、8 秒源站断流及转封装后拖动进度。
+
+协议模拟成功不代表已经覆盖所有品牌手机和商业视频 App。新客户端兼容问题欢迎附上经过脱敏的诊断信息反馈。
+
+## 项目结构
+
+```text
+public/                 电脑接收界面、手机遥控页和播放器
+src/
+  server.js             HTTP / WebSocket 服务入口
+  protocols/            DLNA、基础 AirPlay、影视 HTTP 协议
+  services/             播放状态、媒体代理、分片缓存
+  utils/                网卡选择、设备标识、数据目录
+  diagnostics/          可选诊断探针
+packaging/              C# 托盘启动器、Windows 清单、Inno Setup 脚本
+scripts/                构建工具准备、打包、成品与安装验证
+tests/                  自动化测试与真实浏览器验证
+docs/images/            README 演示截图
+.github/workflows/      持续集成与发行构建
+```
+
+## 常见问题
+
+<details>
+<summary><strong>视频 App 搜不到设备，应该先检查什么？</strong></summary>
+
+1. 手机与电脑连接同一路由器下可互访的网络，避免访客 Wi-Fi、AP 隔离或跨 VLAN。
+2. 在电脑界面确认 DLNA / AirPlay / 影视状态，选择正确的实体网卡。
+3. 从手机自带浏览器打开电脑显示的网页遥控地址。不同 App 的访问权限可能不同，浏览器成功并不代表所有 App 都已获得局域网权限。
+4. 检查 Windows 专用网络防火墙放行情况，以及手机 App 的附近设备/本地网络授权。
+5. 尝试视频**播放页**的 TV 按钮。首页设备同步入口可能搜索另一类设备。
+6. Android 17 上使用支持相应本地网络权限的新版本 App；旧版 App 即使能够扫码，也可能无法发现设备。
+
+</details>
+
+<details>
+<summary><strong>能搜索到设备，但点了以后没有画面？</strong></summary>
+
+先查看电脑的连接诊断。如果已收到媒体地址，使用默认智能代理模式；需要登录、带短期签名、编码不兼容或 DRM 保护的片源可能无法直接播放。用设置中的本地测试视频区分接收端问题与源站问题，再尝试其他公开、可播放的媒体链接。
+
+</details>
+
+<details>
+<summary><strong>Chrome 打不开局域网页面，但手机自带浏览器可以？</strong></summary>
+
+检查 Chrome 的网站权限、局域网访问限制以及按 App 生效的联网设置。确认输入的是完整 `http://电脑IP:8080/`；不要将手机上的 `127.0.0.1` 当作电脑地址。也可以用自带浏览器完成网页遥控，然后分别排查视频 App 的网络权限。
+
+</details>
+
+<details>
+<summary><strong>苹果控制中心「屏幕镜像」能用吗？</strong></summary>
+
+当前不支持。项目实现的是传统 AirPlay 视频/照片 HTTP 接收，尚未实现苹果屏幕镜像、RAOP 或 FairPlay。文档中的 AirPlay 协议测试不代表镜像功能或苹果真机已经验证。
+
+</details>
+
+<details>
+<summary><strong>为什么视频仍然会缓冲？缓存不是已经加大了吗？</strong></summary>
+
+缓存需要提前下载数据。源站持续低速、手机代理服务停止、Wi-Fi 丢包、设备解码能力不足和视频码率过高仍然会影响播放。可观察播放器中的缓冲秒数、FPS 和丢帧信息；电脑使用网线或较稳定的 Wi-Fi，并选择稳定片源，通常比反复切换模式更有效。
+
+</details>
+
+<details>
+<summary><strong>怎么升级、校验或卸载？</strong></summary>
+
+先从托盘完全退出旧版。安装版运行新的 Setup EXE；便携版解压到新目录。用户配置与上传目录独立保存，卸载后如需清除，可在确认不再需要文件后自行删除数据目录。
+
+Release 中提供 `SHA256SUMS.txt`，可核对下载附件：
+
+```powershell
+Get-FileHash .\MobileTV-1.0.2-Setup-x64.exe -Algorithm SHA256
+```
+
+安装程序暂未配置商业代码签名。请从本仓库正式 Release 获取文件并核对校验和。
+
+</details>
+
+## 贡献与许可证
+
+欢迎通过 [Issue](https://github.com/gemron/mobile-tv-screen/issues) 报告兼容问题，或提交聚焦的 Pull Request。提交前请阅读 [贡献指南](CONTRIBUTING.md)。安全问题请遵循 [安全说明](SECURITY.md)，不要公开包含访问凭据的媒体 URL 或日志。
+
+MobileTV 项目代码采用 [MIT License](LICENSE)。发行包中的 Node.js、FFmpeg 和 npm 依赖遵循各自许可证；FFmpeg 是单独运行的外部程序，并不因本项目使用 MIT 而改用 MIT。详见 [第三方组件说明](THIRD_PARTY_NOTICES.md) 和发行包内的 `licenses/`、`THIRD-PARTY-NOTICES.txt`。
+
+感谢 [Node.js](https://nodejs.org/)、[FFmpeg](https://ffmpeg.org/)、[hls.js](https://github.com/video-dev/hls.js)、[mpegts.js](https://github.com/xqq/mpegts.js)、[Express](https://expressjs.com/) 及其他开源依赖。
