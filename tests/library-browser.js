@@ -26,7 +26,7 @@ async function run() {
       const encoded = rc4(Buffer.from(JSON.stringify(ext).split('').map(character => String.fromCharCode(character.charCodeAt(0) + 2)).join('')), 'fantaiying921').toString('base64');
       res.end(JSON.stringify({ sites: [{ key: 'native', name: '原生点播示例', type: 3, api: 'csp_T4Guard', ext: encoded, header },{key:'quality',name:'多画质协议测试',type:4,api:originBase+'/quality'},{key:'web',name:'网页解析测试',type:4,api:originBase+'/web'},{key:'discovery',name:'豆豆片单示例',type:3,api:'csp_DouDouGuard',searchable:0,ext:{metadataApi:originBase+'/metadata/',metadataKey:'fixture'}},{key:'wogg',name:'玩偶片源示例',type:3,api:'csp_WoGGGuard',ext:{siteUrl:originBase}},{key:'slow',name:'Slow source',type:1,api:originBase+'/slow'}], lives: [{ name: '直播示例', url: originBase + '/channels', headers: header }] })); return;
     }
-    if(url.pathname.startsWith('/metadata/')){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({start:0,count:20,total:1,items:[{id:'meta1',title:'独立点播测试',rating:{value:8}}]}));return;}
+    if(url.pathname.startsWith('/metadata/')){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({start:0,count:20,total:2,items:[{id:'meta1',title:'独立点播测试',rating:{value:8}},{id:'meta2',title:'下一部推荐',rating:{value:7.8}}]}));return;}
     if(url.pathname.startsWith('/vodsearch/')){res.setHeader('Content-Type','text/html');res.end('<div class="module-search-item"><a title="独立点播测试" href="/voddetail/fixture.html">独立点播测试</a></div>');return;}
     if(url.pathname==='/slow'){const ranking=url.searchParams.get('wd')==='rank fixture';const pending={ranking,closed:false,release:()=>{if(!res.destroyed)res.end(JSON.stringify({list:[{vod_id:'slow',vod_name:ranking?'Rank Fixture':'Slow result'}]}));}};res.on('close',()=>{pending.closed=true;});pendingSearch.push(pending);return;}
     if (url.pathname === '/api') {
@@ -219,19 +219,30 @@ async function run() {
   console.log('PASS: cloud save consent names one file and its space cost, clears on line change, and plays only after explicit confirmation');
   await browser.evaluate('document.getElementById("librarySite").value="discovery";document.getElementById("librarySite").dispatchEvent(new Event("change"))');
   await browser.wait('document.querySelector(".vod-card")?.dataset.key.includes("discovery")');assert.equal(await browser.evaluate('document.querySelectorAll("#libraryCategories button").length'),8);
-  await browser.evaluate('document.querySelector(".vod-card").click()');
-  await browser.wait('!document.getElementById("libraryDetail").open && !document.getElementById("libraryCancelSearch").hidden && document.getElementById("libraryResults").textContent.includes("玩偶片源示例")');
+  await browser.evaluate('window.recommendation=document.querySelector("#libraryResults .vod-card");window.nextRecommendation=document.querySelectorAll("#libraryResults .vod-card")[1];libraryResults.style.paddingBottom="1000px";scrollTo(0,200);window.recommendationScroll=scrollY;recommendation.focus({preventScroll:true});recommendation.click()');
+  await browser.wait('libraryMatches.open && !libraryDetail.open && !libraryMatchesCancel.hidden && libraryMatchesResults.textContent.includes("玩偶片源示例")');
   assert.ok(pendingSearch.length>0,'A slow source remains pending after fast/cloud results appear');
-  await browser.evaluate('window.searchCard=document.querySelector(".vod-card");window.searchCard.focus()');
+  await browser.evaluate('window.searchCard=document.querySelector("#libraryMatchesResults .vod-card");window.searchCard.focus()');
   await browser.screenshot(path.resolve('data/ui-previews/discovery-source-search.png'));
-  pendingSearch.forEach(value=>value.release());await browser.wait('document.getElementById("libraryCancelSearch").hidden');
-  assert.equal(await browser.evaluate('document.querySelector(".vod-card")===window.searchCard && document.activeElement===window.searchCard'),true,'Incremental results retain card identity and keyboard focus');
-  const previousSearchCount=pendingSearch.length;await browser.evaluate('document.getElementById("librarySearchForm").requestSubmit()');
+  pendingSearch.forEach(value=>value.release());await browser.wait('libraryMatchesCancel.hidden');
+  assert.equal(await browser.evaluate('document.querySelector("#libraryMatchesResults .vod-card")===window.searchCard && document.activeElement===window.searchCard'),true,'Incremental popup results retain card identity and keyboard focus');
+  assert.equal(await browser.evaluate('document.querySelector("#libraryResults .vod-card")===recommendation && librarySite.value==="discovery" && librarySearch.value==="" && document.querySelectorAll("#libraryCategories button").length===8'),true,'Finding sources leaves recommendations, filters and search input untouched');
+  await browser.evaluate('Array.from(libraryMatchesResults.querySelectorAll(".vod-card")).find(card=>card.dataset.key.includes("native")).click()');await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false" && document.querySelectorAll(".episode-button").length===2');
+  await browser.key('Escape');await browser.wait('!libraryDetail.open && libraryMatches.open');await browser.key('Escape');await browser.wait('!libraryMatches.open');
+  assert.equal(await browser.evaluate('document.activeElement===recommendation && Math.abs(scrollY-recommendationScroll)<=1 && librarySite.value==="discovery"'),true,'Closing nested details and source results restores the original recommendation focus and scroll position');
+  const previousPending=pendingSearch.length;await browser.evaluate('nextRecommendation.click()');await browser.wait('libraryMatches.open && libraryMatchesTitle.textContent.includes("下一部推荐") && !libraryMatchesCancel.hidden');
+  for(let i=0;i<100&&pendingSearch.length===previousPending;i++)await new Promise(r=>setTimeout(r,10));const nextPending=pendingSearch.length;assert.ok(nextPending>previousPending);await browser.key('Escape');await browser.wait('!libraryMatches.open');for(let i=0;i<100&&pendingSearch.at(-1)?.closed!==true;i++)await new Promise(r=>setTimeout(r,10));
+  assert.equal(pendingSearch.at(-1).closed,true,'Closing a recommendation popup cancels slow upstream searches');assert.ok(nextPending>0);
+  await browser.evaluate('recommendation.click()');await browser.wait('libraryMatches.open && Array.from(libraryMatchesResults.querySelectorAll(".vod-card")).some(card=>card.dataset.key.includes("native"))');
+  await browser.evaluate('Array.from(libraryMatchesResults.querySelectorAll(".vod-card")).find(card=>card.dataset.key.includes("native")).click()');await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false"');await browser.evaluate('document.querySelector(".episode-button").click()');
+  await browser.wait('!libraryDetail.open && !libraryMatches.open && tvVideo.currentTime>.5 && !tvVideo.paused');assert.equal((await fetch(base+'/api/library/playback').then(r=>r.json())).playback.siteKey,'native');assert.equal(await browser.evaluate('librarySite.value==="discovery" && document.querySelector("#libraryResults .vod-card")===recommendation'),true);
+  await browser.evaluate('btnStopCast.click();libraryResults.style.paddingBottom=""');await browser.wait('!document.body.classList.contains("casting-active")');
+  const previousSearchCount=pendingSearch.length;await browser.evaluate('librarySearch.value="独立点播测试";document.getElementById("librarySearchForm").requestSubmit()');
   await browser.wait('!document.getElementById("libraryCancelSearch").hidden && document.querySelectorAll(".vod-card").length>0');
   for(let attempt=0;attempt<100&&pendingSearch.length===previousSearchCount;attempt++)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(pendingSearch.length>previousSearchCount);
   await browser.evaluate('document.getElementById("libraryCancelSearch").click()');await browser.wait('document.getElementById("libraryStatus").textContent.includes("已停止搜索")');
   for(let attempt=0;attempt<100&&!pendingSearch.at(-1).closed;attempt++)await new Promise(resolve=>setTimeout(resolve,10));assert.equal(pendingSearch.at(-1).closed,true,'Stopping the UI search cancels upstream work');pendingSearch.forEach(value=>value.release());
-  console.log('PASS: discovery cards directly stream public/cloud search results, preserve keyboard focus and cancel pending sources');
+  console.log('PASS: recommendation source popups preserve browsing/focus/scroll, return from nested details, cancel old searches and play the selected provider; manual search remains available');
   await browser.evaluate('document.getElementById("librarySearch").value="rank fixture";document.getElementById("librarySearchForm").requestSubmit()');
   await browser.wait('Array.from(document.querySelectorAll(".vod-card")).some(card=>card.title==="rank fixture extra")');await browser.evaluate('window.rankingCard=Array.from(document.querySelectorAll(".vod-card")).find(card=>card.title==="rank fixture extra");window.rankingCard.focus()');
   for(let attempt=0;attempt<100&&!pendingSearch.at(-1)?.ranking;attempt++)await new Promise(resolve=>setTimeout(resolve,10));assert.equal(pendingSearch.at(-1).ranking,true);pendingSearch.at(-1).release();

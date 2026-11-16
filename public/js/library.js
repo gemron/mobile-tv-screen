@@ -140,7 +140,7 @@
   }
   function isFavorite(selection) { return state.collection.favorites.some(item => item.sourceId === (selection.sourceId || state.config?.sourceId) && item.kind === selection.kind && (item.kind === 'live' ? item.sourceKey === selection.sourceKey && item.channelId === selection.channelId : item.siteKey === selection.siteKey && String(item.vodId) === String(selection.vodId))); }
   function updateFavoriteButtons() {
-    const detail = { kind: 'vod', siteKey: state.site, vodId: state.detail?.id };
+    const detail = { kind: 'vod', siteKey: state.detailSite || state.site, vodId: state.detail?.id };
     for (const [button, selection] of [[$('libraryDetailFavorite'), detail], [$('libraryPlayerFavorite'), currentPlayback()]]) if (selection) { const saved = isFavorite(selection); button.textContent = saved ? '★ 已收藏' : '☆ 收藏'; button.setAttribute('aria-pressed', String(saved)); }
   }
   async function toggleFavorite(selection, button) {
@@ -171,17 +171,16 @@
     }
   }
 
-  function renderVideos(data, append = false) {
-    if (data.list.some(item => item.schedule)) { renderEvents(data); return; }
-    $('libraryScheduleFilters').hidden = true; $('libraryResults').classList.remove('is-schedule');
-    state.page = data.page; state.pages = data.pageCount;
-    if (!append) $('libraryResults').replaceChildren();
-    const container=$('libraryResults'),focused=document.activeElement;
+  function renderVideos(data, append = false, matches = false) {
+    if (!matches && data.list.some(item => item.schedule)) { renderEvents(data); return; }
+    if(!matches){$('libraryScheduleFilters').hidden = true; $('libraryResults').classList.remove('is-schedule');state.page = data.page; state.pages = data.pageCount;}
+    const container=$(matches?'libraryMatchesResults':'libraryResults'),focused=document.activeElement;
+    if (!append) container.replaceChildren();
     const existing = new Map([...container.querySelectorAll('.vod-card')].map(card => [card.dataset.key,card]));
     const retained=new Set();
-    if (data.list.length) $('libraryResults').querySelectorAll('.library-empty').forEach(element => element.remove());
+    if (data.list.length) container.querySelectorAll('.library-empty').forEach(element => element.remove());
     let before=container.firstElementChild;
-    if (!data.list.length && (!append || data.done)) placeholder(data.done ? '没有找到片源，可换个关键词或稍后重试。' : data.notice || '没有找到影片，换个关键词或分类试试。');
+    if (!data.list.length && (!append || data.done)) {const message=data.done ? '没有找到片源，可稍后重新搜索或试试其他推荐。' : data.notice || '没有找到影片，换个关键词或分类试试。';if(matches)container.replaceChildren(node('div','library-empty',message));else placeholder(message);}
     else for (const video of data.list) {
       const key = JSON.stringify([video.siteKey || state.site, video.id]);
       retained.add(key);
@@ -197,9 +196,10 @@
       if (video.remarks) artwork.append(node('span', 'vod-remark', video.remarks));
       card.append(artwork, node('strong', 'vod-title', video.title), node('span', 'vod-meta', [video.sourceName, video.year, video.area, video.category].filter(Boolean).join(' · ')));
       const label=node('span','vod-match',video.match?.label||'');label.hidden=!label.textContent;card.append(label);
-      card.addEventListener('click', () => { if(video.searchTitle){searchSources(video.searchTitle);return;} if(video.siteKey){state.site=video.siteKey;$('librarySite').value=video.siteKey;} if(video.folder){state.category=video.id;loadList(1);}else showDetail(video.id,false,video.title); }); container.insertBefore(card,before);before=card.nextElementSibling;
+      card.addEventListener('click', () => { if(video.searchTitle){openMatches(video,card);return;} if(matches){stopMatches();showDetail(video.id,false,video.title,video.siteKey||state.site);return;} if(video.siteKey){state.site=video.siteKey;$('librarySite').value=video.siteKey;} if(video.folder){state.category=video.id;loadList(1);}else showDetail(video.id,false,video.title); }); container.insertBefore(card,before);before=card.nextElementSibling;
     }
     if(append){for(const [key,card]of existing)if(!retained.has(key)&&!card.contains(focused))card.remove();if(focused?.isConnected&&document.activeElement!==focused)focused.focus({preventScroll:true});}
+    if(matches){$('libraryMatchesStatus').textContent=data.notice||`${data.list.length} 个片源结果${data.done?'':' · 继续搜索中…'}`;return;}
     $('libraryPager').hidden = !data.list.length || data.pageCount <= 1;
     $('libraryPage').textContent = `${data.page} / ${data.pageCount}`;
     $('libraryPrevious').disabled = data.page <= 1; $('libraryMore').disabled = data.page >= data.pageCount;
@@ -232,31 +232,43 @@
     const card=node('div','schedule-team');if(team.logo)card.append(teamImage(team.logo,team.name));else card.append(node('span','team-initial',Array.from(team.name||'球队').slice(0,2).join('')));card.append(node('strong','',team.name));return card;
   }
 
+  async function streamSources(title,signal,current,render) {
+    let reader;
+    try {
+      const response=await fetch('/api/library/search/stream?keyword='+encodeURIComponent(title),{signal});
+      if(!response.ok||!response.body)throw new Error('搜索服务暂时不可用，请重试');
+      reader=response.body.getReader();const decoder=new TextDecoder();let pending='';
+      while(current()){
+        const chunk=await reader.read();if(chunk.done)break;pending+=decoder.decode(chunk.value,{stream:true});
+        if(pending.length>2*1024*1024)throw new Error('搜索结果过大，请缩小关键词范围');
+        let end;while((end=pending.indexOf('\n\n'))>=0){const event=pending.slice(0,end);pending=pending.slice(end+2);const line=event.split('\n').find(value=>value.startsWith('data: '));if(!line||!current())continue;const data=JSON.parse(line.slice(6));if(data.error)throw new Error(data.error);render(data);}
+      }
+    }finally{try{await reader?.cancel();}catch{}}
+  }
+  function stopMatches() {
+    state.matchSearch?.controller.abort();$('libraryMatches').setAttribute('aria-busy','false');$('libraryMatchesCancel').hidden=true;
+    const count=$('libraryMatchesResults').querySelectorAll('.vod-card').length;$('libraryMatchesStatus').textContent=`已停止搜索 · ${count} 个片源结果`;$('libraryMatchesRetry').hidden=false;
+    if(!count)$('libraryMatchesResults').replaceChildren(node('div','library-empty','搜索已停止，可重新搜索，或关闭后查看其他推荐。'));
+  }
+  async function openMatches(video,trigger=state.matchTrigger) {
+    state.matchSearch?.controller.abort();state.matchVideo=video;state.matchTrigger=trigger;
+    const request=state.matchSearch={controller:new AbortController()},dialog=$('libraryMatches'),current=()=>state.matchSearch===request&&dialog.open&&!request.controller.signal.aborted;
+    $('libraryMatchesTitle').textContent=video.searchTitle+' · 片源';$('libraryMatchesResults').replaceChildren(node('div','library-empty','正在查找可播放片源…'));
+    $('libraryMatchesStatus').classList.remove('error');$('libraryMatchesStatus').textContent='有结果后即可选择，不必等待全部完成。';$('libraryMatchesCancel').hidden=false;$('libraryMatchesRetry').hidden=true;dialog.setAttribute('aria-busy','true');if(!dialog.open)dialog.showModal();
+    try{await streamSources(video.searchTitle,request.controller.signal,current,data=>renderVideos(data,true,true));}
+    catch(error){if(current()&&error.name!=='AbortError'){$('libraryMatchesStatus').textContent=error.message;$('libraryMatchesStatus').classList.add('error');if(!$('libraryMatchesResults').querySelector('.vod-card'))$('libraryMatchesResults').replaceChildren(node('div','library-empty','暂未取得片源，可重新搜索或关闭后查看其他推荐。'));}}
+    finally{if(state.matchSearch===request){dialog.setAttribute('aria-busy','false');$('libraryMatchesCancel').hidden=true;$('libraryMatchesRetry').hidden=false;}}
+  }
   async function searchSources(title) {
     title = String(title || '').trim(); if (!title) { $('librarySearch').focus(); return; }
     const request = begin(); state.keyword = title; state.category = ''; state.filters = {};
     $('librarySearch').value = title; $('librarySearchAll').checked = true; $('libraryFilters').hidden = true;
     syncSearchUi();
     placeholder('正在搜索片源…'); status('正在搜索片源，有结果后即可选择播放。'); $('libraryCancelSearch').hidden = false;
-    let reader;
     try {
-      const response = await fetch('/api/library/search/stream?keyword=' + encodeURIComponent(title), { signal: request.signal });
-      if (!response.ok || !response.body) throw new Error('搜索服务暂时不可用，请重试');
-      reader = response.body.getReader(); const decoder = new TextDecoder(); let pending = '';
-      while (request.id === state.request) {
-        const chunk = await reader.read(); if (chunk.done) break;
-        pending += decoder.decode(chunk.value, { stream: true });
-        if (pending.length > 2 * 1024 * 1024) throw new Error('搜索结果过大，请缩小关键词范围');
-        let end;
-        while ((end = pending.indexOf('\n\n')) >= 0) {
-          const event = pending.slice(0, end); pending = pending.slice(end + 2);
-          const line = event.split('\n').find(value => value.startsWith('data: ')); if (!line || request.id !== state.request) continue;
-          const data = JSON.parse(line.slice(6)); if (data.error) throw new Error(data.error);
-          renderVideos(data, true);
-        }
-      }
+      await streamSources(title,request.signal,()=>request.id===state.request,data=>renderVideos(data,true));
     } catch (error) { if (request.id === state.request) report(error); }
-    finally { try { await reader?.cancel(); } catch {} if (request.id === state.request) $('libraryCancelSearch').hidden = true; }
+    finally { if (request.id === state.request) $('libraryCancelSearch').hidden = true; }
   }
 
   async function loadHome() {
@@ -278,15 +290,15 @@
     $('libraryDetail').classList.toggle('is-loading',loading);$('libraryDetail').setAttribute('aria-busy',String(loading));$('libraryDetailLoading').hidden=!loading;
     $('libraryLines').disabled=loading||!state.detail;$('libraryParser').disabled=loading;
   }
-  async function showDetail(id, refresh = false, title = '') {
+  async function showDetail(id, refresh = false, title = '', site = refresh ? state.detailSite || state.site : state.site) {
     const previousProvider = refresh ? state.detail?.lines[state.line]?.provider : '';
     title=title||(state.detail?.id===id?state.detail.title:'影片详情');
-    const request = begin();state.detailRequest=request.id;state.detail=null;status('正在读取影片详情…'); $('libraryDetailStatus').replaceChildren();
+    const request = begin();state.detailRequest=request.id;state.detailSite=site;state.detail=null;status('正在读取影片详情…'); $('libraryDetailStatus').replaceChildren();
     $('libraryDetailTitle').textContent=title;for(const key of ['libraryDetailInfo','libraryDetailDescription','libraryDetailCast'])$(key).textContent='';
     $('libraryDetailPicture').hidden=true;$('libraryDetailPicture').removeAttribute('src');$('libraryMatchTeams').hidden=true;$('libraryMatchTeams').replaceChildren();$('libraryDetail').classList.remove('is-match');$('libraryLines').replaceChildren();$('libraryEpisodes').replaceChildren();
     $('libraryDetailFavorite').hidden = true; detailLoading(true);if(!$('libraryDetail').open)$('libraryDetail').showModal();
     try {
-      const video = await api('/detail?' + new URLSearchParams({ site: state.site, id, ...(refresh ? {refresh:'1'} : {}) }), undefined, request.signal); if (request.id !== state.request) return;
+      const video = await api('/detail?' + new URLSearchParams({ site, id, ...(refresh ? {refresh:'1'} : {}) }), undefined, request.signal); if (request.id !== state.request) return;
       state.detail = video; state.line = 0; $('libraryDetailTitle').textContent = video.title; $('libraryDetailInfo').textContent = [video.year, video.area, video.category].filter(Boolean).join(' · ');
       if(previousProvider)state.line=Math.max(0,video.lines.findIndex(line=>line.provider===previousProvider));
       $('libraryDetailDescription').textContent = video.description || '暂无简介'; $('libraryDetailCast').textContent = [video.director && '导演：' + video.director, video.actor && '主演：' + video.actor].filter(Boolean).join('　');
@@ -301,13 +313,13 @@
       if(request.id===state.request&&error.name!=='AbortError'&&$('libraryDetail').open){
         report(error);$('libraryDetailStatus').textContent=error.message;
         if(error.verifyUrl)verificationButton($('libraryDetailStatus'),error.verifyUrl);
-        const retry=node('button','btn','重试读取选集');retry.type='button';retry.addEventListener('click',()=>showDetail(id,refresh,title));$('libraryDetailStatus').append(retry);
+        const retry=node('button','btn','重试读取选集');retry.type='button';retry.addEventListener('click',()=>showDetail(id,refresh,title,site));$('libraryDetailStatus').append(retry);
       }
     } finally {if(state.detailRequest===request.id){state.detailRequest=null;detailLoading(false);}}
   }
   function verificationButton(container, url, label='打开登录 / 验证页面') {
     const button = node('button', 'btn', label); button.type = 'button';
-    button.addEventListener('click', async () => { try { await api('/browser/open', { siteKey: state.site, verifyUrl: url }); toast('在已打开的官方页面完成操作后重试。'); } catch(error) { toast(error.message); } });
+    button.addEventListener('click', async () => { try { await api('/browser/open', { siteKey: state.detailSite || state.site, verifyUrl: url }); toast('在已打开的官方页面完成操作后重试。'); } catch(error) { toast(error.message); } });
     container.append(button);
   }
   function renderEpisodes() {
@@ -324,7 +336,7 @@
         const retry=node('button','btn','重新读取线路');retry.type='button';retry.addEventListener('click',()=>showDetail(state.detail.id,true));panel.append(retry);$('libraryEpisodes').append(panel);
       } else if (state.detail?.searchTitle) {
         const button=node('button','btn btn-primary','查找片源');button.type='button';
-        button.addEventListener('click', ()=>{const title=state.detail.searchTitle;$('libraryDetail').close();searchSources(title);});
+        button.addEventListener('click', ()=>{const title=state.detail.searchTitle;$('libraryDetail').close();openMatches({searchTitle:title});});
         $('libraryEpisodes').append(button);
       } else $('libraryEpisodes').append(node('p', 'field-hint', '站点没有返回可选剧集')); return;
     }
@@ -340,10 +352,10 @@
   }
   async function playEpisode(index, button, saveToDrive=false) {
     cancelEpisodeRequest();
-    const selection={siteKey:state.site,vodId:state.detail?.id,line:state.line,index};
-    const detail = state.detail, selected=()=>state.site===selection.siteKey&&state.detail===detail&&state.line===selection.line&&$('libraryDetail').open;
+    const selection={siteKey:state.detailSite || state.site,vodId:state.detail?.id,line:state.line,index};
+    const detail = state.detail, selected=()=>state.detailSite===selection.siteKey&&state.detail===detail&&state.line===selection.line&&$('libraryDetail').open;
     const episode = state.detail?.lines[state.line]?.episodes[index];
-    if (episode?.id.startsWith('magnet:?')) { $('libraryDetail').close(); await showDetail(episode.id); return; }
+    if (episode?.id.startsWith('magnet:?')) { $('libraryDetail').close(); await showDetail(episode.id,false,'',selection.siteKey); return; }
     const attempt = { controller: new AbortController(), button, started: Date.now() }; state.episodeRequest = attempt;
     const current = () => state.episodeRequest === attempt && selected();
     button.disabled = true;
@@ -355,7 +367,7 @@
     try {
       const result = await api('/play', { ...selection, parserKey: $('libraryParser').value,saveToDrive }, attempt.controller.signal);
       if(!current())return;
-      state.playback = result.playback; state.episodeRequest=null; panel.classList.remove('is-resolving'); $('libraryDetail').close(); panel.textContent = ''; updateControls(); refreshCollection().catch(() => {});
+      state.playback = result.playback; state.episodeRequest=null; panel.classList.remove('is-resolving'); $('libraryDetail').close();if($('libraryMatches').open)$('libraryMatches').close();panel.textContent = ''; updateControls(); refreshCollection().catch(() => {});
     }
     catch (error) {
       if(!current())return;
@@ -478,7 +490,7 @@
   $('libraryVerify').addEventListener('click', async () => { try { await api('/browser/open', { siteKey: state.site, verifyUrl: state.verifyUrl }); toast('完成验证或登录后，点击“重试”。'); } catch (error) { toast(error.message); } });
   $('libraryVerifyRetry').addEventListener('click', () => state.mode === 'live' ? loadChannels(true) : loadHome());
   $('libraryClearHistory').addEventListener('click', async () => { try { state.collection = await api('/collection/remove', { kind: 'history', clear: true }); renderCollectionCounts(); renderCollection(); } catch (error) { toast(error.message); } });
-  $('libraryDetailFavorite').addEventListener('click', event => toggleFavorite({ kind: 'vod', siteKey: state.site, vodId: state.detail?.id }, event.currentTarget));
+  $('libraryDetailFavorite').addEventListener('click', event => toggleFavorite({ kind: 'vod', siteKey: state.detailSite || state.site, vodId: state.detail?.id }, event.currentTarget));
   $('libraryPlayerFavorite').addEventListener('click', event => toggleFavorite(currentPlayback(), event.currentTarget));
   $('libraryLiveFavorites').addEventListener('click', () => { state.liveFavorites = !state.liveFavorites; $('libraryLiveFavorites').setAttribute('aria-pressed', String(state.liveFavorites)); renderChannels(); });
   $('libraryLiveResume').addEventListener('click', event => { const last = state.collection.history.find(item => item.kind === 'live'); if (last) resumeItem(last.id, false, event.currentTarget); });
@@ -547,6 +559,8 @@
   $('libraryPrevious').addEventListener('click', () => loadList(state.page - 1)); $('libraryMore').addEventListener('click', () => loadList(state.page + 1));
   $('libraryMatchDate').addEventListener('change', () => { if (state.events) renderEvents(state.events); }); $('libraryMatchStatus').addEventListener('change', () => { if (state.events) renderEvents(state.events); });
   $('libraryCloseDetail').addEventListener('click', () => $('libraryDetail').close()); $('libraryLines').addEventListener('change', () => { state.line = Number($('libraryLines').value); renderEpisodes(); });
+  $('libraryCloseMatches').addEventListener('click',()=>$('libraryMatches').close());$('libraryMatchesCancel').addEventListener('click',stopMatches);$('libraryMatchesRetry').addEventListener('click',()=>{if(state.matchVideo)openMatches(state.matchVideo);});
+  $('libraryMatches').addEventListener('close',()=>{if($('libraryMatches').open)return;state.matchSearch?.controller.abort();state.matchSearch=null;$('libraryMatches').setAttribute('aria-busy','false');state.matchTrigger?.focus({preventScroll:true});});
   $('libraryDetail').addEventListener('close',()=>{if(!$('libraryDetail').open){cancelEpisodeRequest();$('libraryDetailStatus').classList.remove('is-resolving');if(state.detailRequest!=null){if(state.detailRequest===state.request){state.fetching?.abort();state.request++;status('已取消读取选集');}state.detailRequest=null;detailLoading(false);}}});
   $('libraryDetailPicture').addEventListener('error', () => { $('libraryDetailPicture').hidden = true; });
   $('libraryLiveSource').addEventListener('change', () => { state.liveSource = $('libraryLiveSource').value; loadChannels(); }); $('libraryLiveRefresh').addEventListener('click', () => loadChannels(true));
@@ -554,7 +568,7 @@
   $('libraryMoreChannels').addEventListener('click', () => { state.channelLimit += 300; renderChannels(); });
   $('libraryPlayerPrevious').addEventListener('click', () => next(-1)); $('libraryPlayerNext').addEventListener('click', () => next(1));
   $('libraryQuality').addEventListener('change',async event=>{const current=currentPlayback();if(!current||current.kind!=='vod')return;event.target.disabled=true;try{const result=await api('/play',{...current,quality:Number(event.target.value),resumePosition:window.MobileTVPlayerState()?.position||0,sessionId:current.sessionId});state.playback=result.playback;updateControls();}catch(error){toast(error.message);updateControls();}finally{event.target.disabled=false;}});
-  $('libraryChooseEpisode').addEventListener('click', () => { const current = currentPlayback(); if (!current || current.kind !== 'vod') return; state.site = current.siteKey; showDetail(current.vodId,false,current.title); });
+  $('libraryChooseEpisode').addEventListener('click', () => { const current = currentPlayback(); if (!current || current.kind !== 'vod') return; showDetail(current.vodId,false,current.title,current.siteKey); });
   $('librarySwitchLine').addEventListener('click', () => { const current = currentPlayback(); if (!current || current.kind !== 'live') return; const channel = current.channels.find(value => value.id === current.channelId); state.liveSource = current.sourceKey; playChannel(current.channelId, (current.channelLine + 1) % channel.lines); });
   try { $('libraryAutoNext').checked = localStorage.getItem('mobiletv-auto-next') !== 'off'; } catch {}
   $('libraryAutoNext').addEventListener('change', () => { try { localStorage.setItem('mobiletv-auto-next', $('libraryAutoNext').checked ? 'on' : 'off'); } catch {} });
