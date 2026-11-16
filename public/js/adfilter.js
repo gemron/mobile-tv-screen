@@ -6,7 +6,7 @@
   label.append(toggle, document.createTextNode('过滤视频广告'));
   const description = make('p', '自动读取订阅规则，保留原视频清晰度。', 'quality-note');
   const button = make('button', '过滤规则', 'text-button'); button.type = 'button'; button.id = 'adFilterSettings';
-  const block = make('div', '', 'ad-filter-options'); block.append(label, description, button); panel.insertBefore(block, panel.querySelector('.options-buttons'));
+  const block = make('div', '', 'ad-filter-options'); block.append(label, description, button); panel.querySelector('.options-buttons').before(block);
   const dialog = make('dialog', '', 'app-dialog'); dialog.id = 'adFilterDialog'; dialog.setAttribute('aria-labelledby', 'adFilterTitle');
   const heading = make('h2', '广告过滤'); heading.id = 'adFilterTitle'; const close = make('button', '关闭', 'btn'); close.type = 'button'; close.addEventListener('click', () => dialog.close());
   const head = make('div', '', 'ad-filter-header'); head.append(heading, close);

@@ -11,6 +11,11 @@ castState.syncFromPlayer({sessionId:stoppedSession.sessionId,status:'PLAYING',po
 assert.equal(castState.getSnapshot().status,'IDLE','Telemetry already in flight cannot revive playback after Stop');
 assert.equal(castState.getSnapshot().position,0);
 assert.equal(castState.getSnapshot().duration,0);
+const timedSession=castState.setMedia({url:'https://fixture.test/video.mp4',autoPlay:false});
+castState.setMediaDuration({sessionId:timedSession.sessionId-1,duration:99});assert.equal(castState.getSnapshot().duration,0,'An old probe cannot change the current movie duration');
+castState.setMediaDuration({sessionId:timedSession.sessionId,duration:Infinity});assert.equal(castState.getSnapshot().duration,0);
+castState.setMediaDuration({sessionId:timedSession.sessionId,duration:600});assert.equal(castState.getSnapshot().metadata.duration,600);
+castState.stop('Test');
 
 // Run the actual TV script with browser boundaries stubbed. Inspect the URL
 // handed to the media engine rather than duplicating the routing implementation.
@@ -223,7 +228,7 @@ for (const url of ['/uploads/video.mp4', 'http://127.0.0.1:8080/uploads/video.mp
 
 const phoneVideo = 'http://192.168.1.50:10264/video.mp4';
 assert.strictEqual(createPlayer().cast(phoneVideo, 'proxy').src, `/api/proxy?url=${encodeURIComponent(phoneVideo)}`);
-assert.strictEqual(createPlayer().cast(phoneVideo, 'transcode').src, `/api/transcode?url=${encodeURIComponent(phoneVideo)}`);
+const tokenizedRemux=new URL(createPlayer().cast(phoneVideo,'transcode').src,'http://127.0.0.1');assert.equal(tokenizedRemux.pathname,'/api/transcode');assert.equal(tokenizedRemux.searchParams.get('url'),phoneVideo);assert.ok(tokenizedRemux.searchParams.get('requestId'));
 const directVideo = createPlayer().cast(phoneVideo, 'direct');
 assert.strictEqual(directVideo.src, phoneVideo, 'An explicit direct mode should be respected');
 directVideo.listeners.error();
@@ -338,6 +343,11 @@ const prepared=createPlayer();const remuxUrl='/api/transcode?url='+encodeURIComp
 const preparedVideo=prepared.cast(remuxUrl,'auto','video',{duration:600,startPosition:120,startPositionUnit:'seconds'});assert.ok(preparedVideo.src.startsWith('/api/transcode?url=https%3A%2F%2Ffixture.test%2Fvideo.m4s'));assert.ok(preparedVideo.src.includes('headerContext=fixture'));assert.match(preparedVideo.src,/start=120/);
 preparedVideo.duration=5;preparedVideo.currentTime=2;preparedVideo.listeners.playing();const preparedTelemetry=prepared.sent.filter(message=>message.type==='player-telemetry').at(-1).data;assert.equal(preparedTelemetry.position,122);assert.equal(preparedTelemetry.duration,600);prepared.seek(300);assert.match(preparedVideo.src,/start=300/);assert.ok(!preparedVideo.src.includes(encodeURIComponent('/api/transcode')),'Prepared DASH remux URLs are never wrapped again');
 console.log('PASS: prepared DASH remux preserves original duration, absolute resume/seek and credential context');
+const pendingAudio=createPlayer();pendingAudio.cast(originalUrl,'auto','video',{duration:7380,startPosition:1491.15,startPositionUnit:'seconds'});
+const changedAudio=pendingAudio.cast(originalUrl,'transcode','video',{duration:7380,startPosition:1491.15,startPositionUnit:'seconds',audioTrack:0});
+assert.equal(new URL(changedAudio.src,'http://127.0.0.1').searchParams.get('start'),'1491.15','Choosing a compatible audio track before metadata arrives preserves the queued resume position');
+assert.equal(new URL(changedAudio.src,'http://127.0.0.1').searchParams.get('audioTrack'),'0');
+console.log('PASS: early audio compatibility switches retain the pending resume position and selected track');
 const timeline = createPlayer(), timelineVideo = timeline.cast('http://example.test/movie.mp4');
 timelineVideo.duration = 100; timelineVideo.currentTime = 25;
 timelineVideo.buffered = { length: 2, start: index => [0, 70][index], end: index => [40, 80][index] };
@@ -354,3 +364,23 @@ assert.ok(prepared.elements.get('seekBuffered').style.background.includes('#a2b7
 timeline.cast('', 'auto', 'video', { status: 'IDLE' });
 assert.equal(timeline.elements.get('seekBuffered').style.background, 'none');
 console.log('PASS: seek bar displays disjoint playable buffer ranges, remux offsets and clears old media');
+const localBuffer=createPlayer();const localVideo=localBuffer.cast('/fixture.mp4','transcode','video',{duration:600,startPosition:120,startPositionUnit:'seconds'});
+localVideo.currentTime=2;localVideo.buffered={length:1,start:()=>0,end:()=>4};
+const firstRequest=new URL(localVideo.src,'http://localhost').searchParams.get('requestId');
+localBuffer.progress({sessionId:1,remuxBuffer:{active:true,bytes:123456,maxBytes:67108864,buffers:[{requestId:firstRequest,start:120,ranges:[[0,30]],bytes:123456,maxBytes:67108864}]}});localBuffer.runInterval(1000);
+assert.match(localBuffer.elements.get('metricPerf').textContent,/本机可播: 28.0s/,'Completed remux timestamps extend local availability beyond the tiny native browser range');
+assert.ok(localBuffer.elements.get('seekBuffered').style.background.includes('#557e78 25%'),'The progress bar includes the true prepared-media range');
+localBuffer.seek(400);const secondRequest=new URL(localVideo.src,'http://localhost').searchParams.get('requestId');assert.notEqual(firstRequest,secondRequest);
+localBuffer.progress({sessionId:1,remuxBuffer:{active:true,buffers:[{requestId:firstRequest,start:120,ranges:[[0,500]]}]}});localBuffer.runInterval(1000);assert.match(localBuffer.elements.get('metricPerf').textContent,/本机可播: 4.0s/,'Late data from a previous seek cannot inflate the current buffer');
+localBuffer.progress({sessionId:1,remuxBuffer:{active:true,buffers:[{requestId:secondRequest,start:400,ranges:[[0,40]]}]}});localBuffer.runInterval(1000);assert.match(localBuffer.elements.get('metricPerf').textContent,/本机可播: 40.0s/);
+console.log('PASS: prepared ranges, native buffers and seek epochs produce an honest local playable duration and progress bar');
+const unknownLength=createPlayer(),unknownVideo=unknownLength.cast('/fixture.mp4','transcode','video',{startPosition:120,startPositionUnit:'seconds'});
+unknownVideo.currentTime=2;unknownVideo.duration=3.5;unknownVideo.buffered={length:1,start:()=>0,end:()=>3.5};
+const unknownRequest=new URL(unknownVideo.src,'http://localhost').searchParams.get('requestId');
+unknownLength.progress({sessionId:1,remuxBuffer:{active:true,buffers:[{requestId:unknownRequest,start:120,ranges:[[0,40]]}]}});unknownLength.runInterval(1000);
+assert.match(unknownLength.elements.get('metricPerf').textContent,/本机可播: 38.0s/,'A growing stream duration cannot truncate completed fragments');
+unknownVideo.listeners.playing();assert.equal(unknownLength.sent.filter(m=>m.type==='player-telemetry').at(-1).data.duration,0,'Partial fMP4 duration is never reported as the full movie');
+const loads=unknownVideo.loadCalls;unknownLength.cast('/fixture.mp4','transcode','video',{startPosition:120,startPositionUnit:'seconds',duration:600,metadata:{duration:600}});
+assert.equal(unknownVideo.loadCalls,loads,'Source duration updates do not restart playback');assert.equal(unknownLength.elements.get('seekSlider').max,600);
+unknownVideo.listeners.progress();assert.ok(unknownLength.elements.get('seekBuffered').style.background.includes('#557e78 26.6667%'));
+console.log('PASS: unknown source length never caps the prepared timeline; source duration updates the seek bar without reloading media');

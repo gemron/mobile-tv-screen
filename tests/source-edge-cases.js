@@ -1,6 +1,7 @@
 const assert = require('assert/strict'), http = require('http');
 const { checkHls, checkFlv, huyaUrl } = require('../src/content/adapters/platforms');
 const websites = require('../src/content/adapters/websites');
+const extras = require('../src/content/adapters/extras');
 const playerHtml = '<script>const ad=artplayerPluginAds({url:"https://ads.test/advert.mp4"});const media="https://cdn.test/opaque?signature=fixture";var art=new Artplayer({container:"#player",poster:"https://ads.test/poster.png",plugins:[ad]});art.type="mp4";art.url=media;</script>';
 assert.deepEqual(websites.artplayerMedia(playerHtml), {url:'https://cdn.test/opaque?signature=fixture',type:'mp4'});
 assert.equal(websites.artplayerMedia('<script>const art=new Artplayer({url:runUntrustedCode()});</script>'),null);
@@ -8,6 +9,7 @@ assert.equal(websites.artplayerMedia('<script>const ad=new Artplayer({container:
 (async () => {
   let base;
   const server = http.createServer((req, res) => {
+    if(req.url==='/missing.m3u8'){res.writeHead(404).end('Gone');return;}
     if (req.url === '/play') { res.setHeader('content-type', 'text/html'); res.end('<iframe src="/frame?url=' + encodeURIComponent(base.replace('127.0.0.1', 'localhost') + '/good.m3u8') + '"></iframe>'); return; }
     if (req.url === '/art-player') { res.setHeader('content-type','text/html'); res.end(playerHtml);return; }
     if (req.url.endsWith('.m3u8')) { res.setHeader('content-type', 'application/vnd.apple.mpegurl'); res.end('#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2,\n' + (req.url === '/bad.m3u8' ? '/denied' : req.url === '/empty.m3u8' ? '/empty' : '/segment.ts') + '\n'); return; }
@@ -21,6 +23,9 @@ assert.equal(websites.artplayerMedia('<script>const ad=new Artplayer({container:
   try {
     const headers = { 'user-agent': 'FixtureBrowser/1' };
     assert.equal(await checkHls(base + '/good.m3u8', headers), base + '/good.m3u8');
+    const sports={plugin:'Kanqiu',api:base,headers};
+    await assert.rejects(extras.resolve(sports,{id:base+'/frame?url='+encodeURIComponent(base+'/missing.m3u8')}),/此直播线路暂不可用.*404.*其他线路/);
+    const live=await extras.resolve(sports,{id:base+'/frame?url='+encodeURIComponent(base+'/good.m3u8')});assert.equal(live.isLive,true);assert.equal(live.url,base+'/good.m3u8');
     await assert.rejects(checkHls(base + '/bad.m3u8', headers), /403/); await assert.rejects(checkHls(base + '/empty.m3u8', headers), /为空/);
     assert.equal(await checkFlv(base + '/stream.flv', headers), base + '/stream.flv'); await assert.rejects(checkFlv(base + '/wrong.flv', headers), /未返回 FLV/);
     const now=1794758400123,uid='1234',fm=Buffer.from('prefix_$0_$1_$2_$3').toString('base64'),signed=new URL(huyaUrl({sHlsUrl:'https://live.test/',sStreamName:'stream',sHlsAntiCode:'fm='+encodeURIComponent(fm)+'&ctype=tars_mp&t=102&fs=1'},now,uid,true)),query=signed.searchParams,time=(Math.floor(now/1000)+21600).toString(16),seq='1794758400124234',md5=value=>require('crypto').createHash('md5').update(value).digest('hex');

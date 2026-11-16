@@ -14,8 +14,9 @@ assert.equal(schedule({ startAt: '2026-11-16T04:00:00Z' }).time, '12:00');
 
 (async () => {
   const server = http.createServer((req, res) => {
+    if(req.url==='/source/1'){res.setHeader('content-type','application/json');res.end(JSON.stringify({data:{links:[{name:'Line',url:'https://fixture.test/live.m3u8'}]}}));return;}
     res.setHeader('content-type', 'text/html; charset=utf-8');
-    res.end('<div class="list-group-item live-list-group-time">2026-11-16</div>' + ['已结束', '直播中', '未开始'].map((status, index) => `<div class="list-group-item group-game-item"><div class="row d-none"><span class="category-game-time">${['09:00','11:00','18:00'][index]}</span><span class="game-type">League</span><span class="team-name">Home ${index}</span><span class="team-name">Away ${index}</span><div class="pay-btn"><a class="btn" href="/play/${index}">${status}</a></div></div></div>`).join(''));
+    res.end('<div class="list-group-item live-list-group-time">2026-11-16</div>' + ['已结束', '直播中', '未开始'].map((status, index) => `<div class="list-group-item group-game-item"><div class="row d-none"><span class="category-game-time">${['09:00','11:00','18:00'][index]}</span><span class="game-type">League</span><span class="team-name">Home ${index}</span><span class="team-name">Away ${index}</span><div class="col-xs-1"><img data-src="/home.svg" /></div><div class="col-xs-1"><img src="/away.svg" /></div><div class="pay-btn"><a class="btn" href="/play/${index}">${status}</a></div></div></div>`).join(''));
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = 'http://127.0.0.1:' + server.address().port;
@@ -24,6 +25,8 @@ assert.equal(schedule({ startAt: '2026-11-16T04:00:00Z' }).time, '12:00');
     assert.deepEqual(result.list.map(item => item.schedule.status), ['live', 'upcoming', 'finished']);
     assert.equal(result.list[0].title, 'Home 1 VS Away 1'); assert.equal(result.list[0].schedule.day, '2026-11-16');
     assert.ok(!result.list[0].title.includes('直播中'), 'Status and time stay structured instead of becoming part of the title');
+    assert.equal(result.list[0].schedule.teams[0].logo,base+'/home.svg');assert.equal(result.list[0].schedule.teams[1].logo,base+'/away.svg');
+    const details=await catalog.detail(site,result.list[0].id);assert.equal(details.title,'Home 1 VS Away 1');assert.equal(details.picture,base+'/home.svg');assert.equal(details.schedule.teams.length,2);
     console.log('PASS: Shanghai match dates, live/upcoming/finished order, unknown-state handling and real Kanqiu HTML normalization');
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

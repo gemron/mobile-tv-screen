@@ -269,7 +269,7 @@ async function createAppServer(options = {}) {
   });
 
   app.post('/api/control', (req, res) => {
-    const { action, url, title, mediaType, position, volume, muted, rotation, fitMode, streamMode, playbackRate } =
+    const { action, url, title, mediaType, position, volume, muted, rotation, fitMode, streamMode, playbackRate, audioTrack, burnSubtitle } =
       req.body || {};
     if (req.body?.sessionId != null && Number(req.body.sessionId) !== castState.getSnapshot().sessionId && action !== 'cast') {
       res.status(409).json({ error: '播放会话已经切换' }); return;
@@ -311,7 +311,7 @@ async function createAppServer(options = {}) {
         castState.setMute(muted, 'Control');
         break;
       case 'display':
-        castState.setDisplayOptions({ rotation, fitMode, streamMode, playbackRate });
+        castState.setDisplayOptions({ rotation, fitMode, streamMode, playbackRate, audioTrack, burnSubtitle });
         break;
       default:
         res.status(400).json({ error: `未知控制指令: ${action}` });
@@ -439,6 +439,7 @@ async function createAppServer(options = {}) {
   const onStateChange = (snap) => {
     subtitles.reset(['IDLE', 'STOPPED'].includes(snap.status) ? null : snap.sessionId);
     proxyRouter.originalCache.setMedia(snap.url, snap.status);
+    proxyRouter.mediaTracks.setState(snap);
     broadcastWs({ type: 'state', data: snap });
   };
   const onProgress = (prog) => {
@@ -574,6 +575,7 @@ async function createAppServer(options = {}) {
       await proxyRouter.adFilter.close();
       proxyRouter.mediaCache.clear();
       proxyRouter.originalCache.close();
+      proxyRouter.mediaTracks.close();
       castState.off('stateChange', onStateChange);
       castState.off('progress', onProgress);
       castState.off('command', onCommand);

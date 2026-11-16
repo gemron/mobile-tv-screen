@@ -3,12 +3,12 @@ const { resource } = require('../content/http'), { webUrl, cleanHeaders } = requ
 const { parseSubtitle, subtitleZip, supported } = require('./subtitleFormat');
 const failure = (message, status = 400) => Object.assign(new Error(message), { status });
 class Subtitles {
-  constructor({ dataDir, request = resource, apiBase = 'https://api.assrt.net/' }) {
-    this.file = path.join(dataDir, 'subtitles.json'); this.request = request; this.apiBase = apiBase; this.generation = 0; this.sources = []; this.files = new Map(); this.cache = new Map(); this.token = '';
+  constructor({ dataDir, request = resource, apiBase = 'https://api.assrt.net/', freeApi = 'https://api-shoulei-ssl.xunlei.com/oracle/subtitle' }) {
+    this.file = path.join(dataDir, 'subtitles.json'); this.request = request; this.apiBase = apiBase; this.freeApi = freeApi; this.generation = 0; this.sources = []; this.files = new Map(); this.cache = new Map(); this.token = '';
     try { const saved = JSON.parse(fs.readFileSync(this.file, 'utf8')); if (/^[a-z0-9]{32}$/i.test(saved.token)) this.token = saved.token; } catch {}
   }
   effectiveToken() { return this.token || this.subscriptionToken || ''; }
-  config() { return { configured: Boolean(this.effectiveToken()), tokenSource: this.token ? 'manual' : this.subscriptionToken ? 'subscription' : 'none', provider: 'Assrt', sourceUrl: 'https://assrt.net/api/doc' }; }
+  config() { return { configured: Boolean(this.effectiveToken()), searchAvailable: true, tokenSource: this.token ? 'manual' : this.subscriptionToken ? 'subscription' : 'none', provider: this.effectiveToken() ? 'Assrt' : '迅雷字幕', fallbackProvider: '迅雷字幕', sourceUrl: this.effectiveToken() ? 'https://assrt.net/api/doc' : 'https://www.xunlei.com/' }; }
   invalidateApi() { this.generation++; this.cache.clear(); for (const [id, item] of this.files) if (item.origin !== 'source') this.files.delete(id); }
   setSubscriptionToken(value) { const before = this.effectiveToken(); this.subscriptionToken = typeof value === 'string' && /^[a-z0-9]{32}$/i.test(value) ? value : ''; if (this.effectiveToken() !== before) this.invalidateApi(); }
   configure(token) {
@@ -18,7 +18,7 @@ class Subtitles {
     return this.config();
   }
   current(sessionId, state) { if (!state.url || ['IDLE','STOPPED'].includes(state.status) || Number(sessionId) !== state.sessionId) throw failure('播放已切换，请重新打开字幕面板', 409); }
-  reset(sessionId) { if (this.sessionId !== sessionId) { this.sessionId = sessionId; this.sources = []; this.files.clear(); } }
+  reset(sessionId) { if (this.sessionId !== sessionId) { this.sessionId = sessionId; this.generation++; this.sources = []; this.files.clear(); this.cache.clear(); } }
   put(item) {
     const id = randomBytes(15).toString('hex'); this.files.set(id, { ...item, expires: Date.now() + 15 * 60000 });
     while (this.files.size > 300 || [...this.files.values()].reduce((sum, value) => sum + (value.body?.length || 0), 0) > 16 * 1024 * 1024) this.files.delete(this.files.keys().next().value);
@@ -48,12 +48,34 @@ class Subtitles {
     keyword = String(keyword || '').trim().slice(0, 200); position = Math.max(0, Math.min(3000, Math.floor(Number(position) || 0)));
     if ([...keyword].length < 3) throw failure('请输入至少 3 个字符搜索字幕');
     const key = keyword + ':' + position, cached = this.cache.get(key); if (cached?.expires > Date.now()) return cached.value;
-    const raw = await this.api('search', { q: keyword, pos: String(position), cnt: '15', filelist: '1' }, signal);
-    const value = { items: raw.filter(item => Number.isSafeInteger(item.id) && item.id > 0).map(item => ({ id: item.id, name: String(item.native_name || item.title || item.videoname || '字幕').slice(0, 240), lang: String(item.lang?.desc || '').slice(0, 80), format: String(item.subtype || '').slice(0, 60) })), nextPosition: position + raw.length, hasMore: raw.length >= 15 };
+    let raw, notice='';
+    if(this.effectiveToken()) {
+      try { raw=await this.api('search', { q: keyword, pos: String(position), cnt: '15', filelist: '1' }, signal); }
+      catch(error) { signal?.throwIfAborted(); if(error.status===409)throw error; notice='Assrt 暂不可用，已使用免 Token 的迅雷字幕'; }
+    }
+    const value = raw?.length ? { provider:'Assrt', items: raw.filter(item => Number.isSafeInteger(item.id) && item.id > 0).map(item => ({ id: item.id, name: String(item.native_name || item.title || item.videoname || '字幕').slice(0, 240), lang: String(item.lang?.desc || '').slice(0, 80), format: String(item.subtype || '').slice(0, 60) })), nextPosition: position + raw.length, hasMore: raw.length >= 15 } : await this.freeSearch(keyword,position,signal);
+    if(notice)value.notice=notice;
     this.cache.set(key, { value, expires: Date.now() + 5 * 60000 }); while (this.cache.size > 40) this.cache.delete(this.cache.keys().next().value);
     return value;
   }
+  async freeSearch(keyword,position,signal) {
+    const generation=this.generation,target=new URL(this.freeApi);target.searchParams.set('name',keyword);
+    let data;try { const response=await this.request(target.href,{headers:{accept:'application/json'},limit:2*1024*1024,timeout:12000,signal});data=JSON.parse(response.text); }
+    catch(error) { signal?.throwIfAborted(); throw failure('免费字幕服务暂时无法访问，可稍后重试或配置 Assrt Token',502); }
+    signal?.throwIfAborted();if(generation!==this.generation)throw failure('字幕搜索设置已变化，请重试',409);
+    if(Number(data.code)!==0||!Array.isArray(data.data))throw failure('免费字幕服务暂未返回有效结果，请稍后重试',502);
+    const rows=data.data.slice(0,300).flatMap(item=>{
+      try { const name=String(item.name||item.simple_name||'字幕').slice(0,240),ext=String(item.ext||'').toLowerCase();if(!supported(name)&&!['srt','vtt','ass','ssa'].includes(ext))return [];
+        return [{name:supported(name)?name:name+'.'+ext,lang:(Array.isArray(item.languages)?item.languages.join(' / '):'').slice(0,80),url:webUrl(item.url),headers:{},origin:'thunder',format:ext.toUpperCase()}];
+      }catch{return [];}
+    });
+    return {provider:'迅雷字幕',items:rows.slice(position,position+15).map(item=>{const file=this.put(item);return {...file,id:'thunder:'+file.id,format:item.format};}),nextPosition:position+15,hasMore:rows.length>position+15};
+  }
   async detail(id, signal) {
+    if(typeof id==='string'&&id.startsWith('thunder:')) {
+      const key=id.slice(8),item=this.files.get(key);if(!item||item.origin!=='thunder'||item.expires<Date.now())throw failure('字幕结果已过期，请重新搜索',410);
+      return {files:[{id:key,name:item.name,lang:item.lang}]};
+    }
     id = Number(id); if (!Number.isSafeInteger(id) || id < 1 || id > 1e10) throw failure('字幕编号无效');
     const raw = await this.api('detail', { id: String(id) }, signal), files = [];
     for (const item of raw) {

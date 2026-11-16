@@ -57,6 +57,9 @@ async function main() {
   const ffmpegPath = fs.realpathSync(process.env.FFMPEG_PATH || (fs.existsSync(preparedFfmpeg) ? preparedFfmpeg : run('where.exe', ['ffmpeg.exe']).trim().split(/\r?\n/)[0]));
   const ffmpeg = path.join(release, 'tools', 'ffmpeg.exe');
   copy(ffmpegPath, ffmpeg);
+  const ffprobePath = path.join(path.dirname(ffmpegPath), 'ffprobe.exe');
+  if (!fs.existsSync(ffprobePath)) throw new Error('The matching FFmpeg distribution must include ffprobe.exe for embedded tracks.');
+  copy(ffprobePath, path.join(release, 'tools', 'ffprobe.exe'));
   const ffmpegVersion = run(ffmpeg, ['-version']).split(/\r?\n/)[0];
   const ffmpegRoot = path.dirname(path.dirname(ffmpegPath));
   for (const [source, target] of [['LICENSE', 'FFmpeg-LICENSE.txt'], ['README.txt', 'FFmpeg-README.txt']]) {
@@ -86,12 +89,15 @@ async function main() {
     `MobileTV ${pkg.version} · Windows 64 位免安装版`, '',
     '用途声明：仅供学习研究和非商业技术测试使用，禁止商业售卖。',
     '第三方组件及历史 MIT 代码遵循各自许可证，详见 LICENSE 和 THIRD_PARTY_NOTICES.md。', '',
-    '本版新增：多订阅切换、播放历史与收藏、电视式直播频道表、B站专用投屏（实验）。',
-    '修复换集状态与厂长媒体解析；解析有加载、取消、超时及重试入口。',
+    '本版新增：音轨和内置字幕选择、免费字幕搜索、片头片尾自动跳过。',
+    '修复可播缓冲与进度条显示、部分影片无声、MKV 字幕读取超时和倍速点击问题。',
+    '夸克临时剧集默认在播完／换集后或空间不足时移入回收站，可在账号管理关闭。',
+    '只清理本软件转存记录中的文件，保护当前播放和正在保存的文件，不清空回收站。',
     '夸克原文件按实际分辨率使用 32–512 MiB 有界缓冲，兼容封装另有 64 MiB 成品预读。',
-    '新增字幕搜索与选择、本地字幕及链接，支持延迟和字号调整；S 键打开。',
-    '应用图标与标题栏更新，保留原生窗口操作。',
-    '缓存自动回收，视频码流不重编码；实际流畅度取决于源站、网络与设备。', '',
+    '字幕优先使用本机／订阅的 Assrt Token，没有时尝试迅雷免费搜索；S 键打开。',
+    '设置与字幕使用双栏半透明面板，小窗口自适应；片库搜索和选集操作更紧凑。',
+    '普通兼容封装保留视频码流；图像字幕兼容显示需明确启用视频转码。',
+    '缓存自动回收，实际流畅度取决于源站、网络与设备。', '',
     '使用方法',
     '1. 将整个 ZIP 解压到一个文件夹，双击 MobileTV.exe。请勿只复制 EXE。',
     '2. 手机和电脑连接同一局域网。在视频 App 的 TV 投屏列表选择本机设备。',
@@ -125,7 +131,7 @@ async function main() {
   console.log(run(compiler, ['/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/codepage:65001', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll', `/win32icon:${icon}`, `/win32manifest:${path.join(root, 'packaging', 'app.manifest')}`, `/out:${path.join(release, 'MobileTV.exe')}`, path.join(root, 'packaging', 'Launcher.cs'), versionSource]).trim());
   let sourceCommit = null, sourceDirty = null;
   try { sourceCommit = run('git', ['rev-parse', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); sourceDirty = Boolean(run('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim()); } catch { /* Source archives may not include Git metadata. */ }
-  const info = { name: 'MobileTV', version: pkg.version, platform: 'win32', arch: 'x64', builtAt: new Date().toISOString(), sourceCommit, sourceDirty, node: process.version, ffmpeg: ffmpegVersion, dependencies: dependencies.length, sha256: { 'runtime/node.exe': await hash(runtime), 'tools/ffmpeg.exe': await hash(ffmpeg), 'MobileTV.exe': await hash(path.join(release, 'MobileTV.exe')) } };
+  const info = { name: 'MobileTV', version: pkg.version, platform: 'win32', arch: 'x64', builtAt: new Date().toISOString(), sourceCommit, sourceDirty, node: process.version, ffmpeg: ffmpegVersion, dependencies: dependencies.length, sha256: { 'runtime/node.exe': await hash(runtime), 'tools/ffmpeg.exe': await hash(ffmpeg), 'tools/ffprobe.exe': await hash(path.join(release,'tools','ffprobe.exe')), 'MobileTV.exe': await hash(path.join(release, 'MobileTV.exe')) } };
   write(path.join(release, 'build-info.json'), JSON.stringify(info, null, 2) + '\n');
   console.log('Creating portable ZIP...');
   const zip = path.join(dist, name + '.zip');

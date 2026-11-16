@@ -73,6 +73,12 @@ async function run() {
   await browser.wait('document.querySelectorAll(".vod-card").length===1');
   assert.equal(await browser.evaluate('document.querySelectorAll("#libraryCategories button").length'), 3);
   assert.equal(await browser.evaluate('document.documentElement.scrollWidth <= innerWidth'), true, 'Library layout fits viewport');
+  await browser.evaluate('librarySearch.value="连贯搜索";librarySearchForm.requestSubmit()');await browser.wait('!libraryResetSearch.hidden && librarySearchHint.textContent.includes("连贯搜索")');
+  await browser.evaluate('librarySite.value="quality";librarySite.dispatchEvent(new Event("change"))');await browser.wait('document.querySelector(".vod-card")?.title==="Rendition fixture"');
+  assert.equal(await browser.evaluate('librarySearch.value==="连贯搜索" && !librarySearchAll.checked && libraryCategories.hidden'),true,'Source switches retain the submitted keyword and apply the current-source scope');
+  await browser.click('#libraryResetSearch');await browser.wait('librarySearch.value==="" && libraryResetSearch.hidden && !libraryCategories.hidden');
+  await browser.evaluate('librarySite.value="native";librarySite.dispatchEvent(new Event("change"))');await browser.wait('document.querySelectorAll("#libraryCategories button").length===3');
+  console.log('PASS: source/search controls retain keywords, explicitly scope results and return to recommendations in one click');
   const screenshots = path.resolve('data', 'ui-previews');
   await browser.screenshot(path.join(screenshots, 'native-library-vod.png'));
   const initialDetail=library.detail;let releaseDetail,startedDetail,finishedDetail;
@@ -90,6 +96,15 @@ async function run() {
   library.detail=initialDetail;await browser.evaluate('document.querySelector("#libraryDetailStatus button").click()');
   await browser.wait('document.getElementById("libraryDetail").open && document.querySelectorAll(".episode-button").length===2');
   console.log('PASS: episode dialog opens immediately with animation, cancels safely and retries failed loads');
+  await browser.evaluate(`window.layoutEpisodes=Array.from(libraryEpisodes.children);window.layoutClasses=libraryEpisodes.className;libraryEpisodes.classList.add('has-file-names');libraryEpisodes.replaceChildren(...Array.from({length:18},(_,i)=>{const b=layoutEpisodes[0].cloneNode(true),name='Long.Movie.Name.2026.S05E'+String(i+1).padStart(2,'0')+'.2160p.WEB-DL.DDP5.1.HDR10.H265.Multilingual.mkv';b.title=name;b.setAttribute('aria-label',name);b.querySelector('.episode-number').textContent=String(i+1).padStart(2,'0');b.querySelector('.episode-label').textContent=name;return b;}));document.documentElement.dataset.theme='dark';`);
+  for(const width of [1200,768,390]){
+    await browser.viewport(width,1000);
+    const layout=await browser.evaluate(`({dialog:libraryDetail.scrollWidth<=libraryDetail.clientWidth+1,grid:libraryEpisodes.scrollWidth<=libraryEpisodes.clientWidth+1,rows:Array.from(libraryEpisodes.children).map(b=>Math.round(b.getBoundingClientRect().height)),titles:Array.from(libraryEpisodes.children).every(b=>b.title.length>60&&b.getAttribute('aria-label')===b.title)})`);
+    assert.ok(layout.dialog&&layout.grid&&layout.titles,JSON.stringify({width,layout}));assert.equal(new Set(layout.rows).size,1,'Long filenames retain equal-height cards');
+    if(width===1200)await browser.screenshot(path.resolve('data/ui-previews/episode-long-names.png'));
+  }
+  await browser.viewport(1440,1000);await browser.evaluate(`libraryEpisodes.replaceChildren(...layoutEpisodes);libraryEpisodes.className=layoutClasses;document.documentElement.dataset.theme='light';`);
+  console.log('PASS: long episode filenames have uniform cards, full accessible titles and no horizontal overflow at desktop/tablet/mobile widths');
   await browser.evaluate(`window.originalEpisodeFetch=window.fetch;window.episodeReplies=[];
     window.fetch=(url,options)=>url==='/api/library/play'?new Promise((resolve,reject)=>{
       const entry={body:JSON.parse(options.body),signal:options.signal};window.episodeReplies.push(entry);
@@ -165,6 +180,7 @@ async function run() {
   await browser.evaluate('document.querySelector("[data-library-nav=vod]").click();document.getElementById("librarySite").value="quality";document.getElementById("librarySite").dispatchEvent(new Event("change"))');
   await browser.wait('document.querySelector(".vod-card")?.title==="Rendition fixture"');await browser.evaluate('document.querySelector(".vod-card").click()');await browser.wait('document.getElementById("libraryDetail").open && document.getElementById("libraryDetail").getAttribute("aria-busy")==="false"');await browser.evaluate('document.querySelector(".episode-button").click()');
   await browser.wait(`window.MobileTVPlayerState()?.url.includes('quality%3D0') && tvVideo.currentTime>2 && !tvVideo.paused && !document.getElementById('libraryQualityLabel').hidden`);
+  assert.equal(await browser.evaluate('libraryPlayerPrevious.hidden && libraryPlayerNext.hidden && libraryAutoNextLabel.hidden && libraryChooseEpisode.textContent==="播放线路"'),true,'Single videos retain line selection without disabled episode controls');
   const position=await browser.evaluate('tvVideo.currentTime');await browser.evaluate('document.getElementById("libraryQuality").value="1";document.getElementById("libraryQuality").dispatchEvent(new Event("change"))');
   await browser.wait('window.MobileTVPlayerState()?.url.includes("quality%3D1") && tvVideo.currentTime>2 && !tvVideo.paused');
   assert.ok(await browser.evaluate('tvVideo.currentTime')>=position-1);console.log('PASS: rendition URL arrays appear in the player and switching resumes playback');
@@ -173,6 +189,15 @@ async function run() {
   await browser.wait('window.MobileTVPlayerState()?.url.includes("parsed%3Dweb") && tvVideo.currentTime>1 && !tvVideo.paused',30000);console.log('PASS: browser parser resolves dynamic HLS and preserves required headers through actual playback');
   await browser.evaluate('document.getElementById("btnStopCast").click()');await browser.wait('!document.body.classList.contains("casting-active")');
   await browser.evaluate('document.getElementById("libraryAccounts").click()');await browser.wait('document.getElementById("libraryAccountsDialog").open');
+  assert.equal(await browser.evaluate('libraryAccountAdvanced.open'),false,'Manual credentials are optional rather than filling the main account layout');
+  for(const [theme,width,height]of [['dark',1200,850],['light',390,650]]){
+    await browser.viewport(width,height);await browser.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
+    const layout=await browser.evaluate(`(()=>{const d=libraryAccountsDialog,r=d.getBoundingClientRect(),option=libraryAccountProvider.options[1],s=getComputedStyle(option);d.scrollTop=d.scrollHeight;const h=libraryCloseAccounts.getBoundingClientRect();return {top:r.top,bottom:r.bottom,left:r.left,right:r.right,closeTop:h.top,closeBottom:h.bottom,scrollbar:getComputedStyle(d).scrollbarWidth,fg:s.color,bg:s.backgroundColor};})()`);
+    assert.ok(layout.top>=-1&&layout.bottom<=height+1&&layout.left>=-1&&layout.right<=width+1&&layout.closeTop>=layout.top&&layout.closeBottom<=layout.bottom,JSON.stringify(layout));
+    assert.equal(layout.scrollbar,'thin');assert.notEqual(layout.fg,layout.bg);assert.notEqual(layout.bg,'rgba(0, 0, 0, 0)');
+    await browser.evaluate('libraryAccountsDialog.scrollTop=0');await browser.screenshot(path.resolve('data/ui-previews/account-compact-'+theme+'.png'));
+  }
+  await browser.viewport(1440,1000);await browser.evaluate('document.documentElement.dataset.theme="light"');
   await browser.evaluate('document.getElementById("libraryAccountCookie").value="fixture=saved";document.getElementById("libraryAccountForm").requestSubmit()');
   await browser.wait('document.getElementById("libraryAccountSummary").textContent.includes("尚未验证")');assert.ok(await browser.evaluate('!!document.getElementById("libraryAccountCheck") && !!document.getElementById("libraryAccountLogout")'));
   await browser.screenshot(path.resolve('data/ui-previews/cloud-account-check.png'));await browser.evaluate('document.getElementById("libraryCloseAccounts").click()');
@@ -227,6 +252,34 @@ async function run() {
   assert.ok(await browser.evaluate('parseFloat(document.getElementById("seekPlayed").style.width)>0'));
   await browser.click('#playerOptions summary');await browser.wait('document.getElementById("playerOptions").open');await browser.click('#hudTitle');await browser.wait('!document.getElementById("playerOptions").open');
   await browser.evaluate('document.getElementById("btnPlayPause").click()');await browser.wait('tvVideo.paused');
+  await browser.click('#playerRate summary');await browser.wait('playerRate.open');
+  await browser.click('#playerRateMenu button[data-rate="1.5"]');await browser.wait('!playerRate.open && MobileTVPlayerState().playbackRate===1.5 && tvVideo.playbackRate===1.5');
+  await browser.evaluate('selectRate.value="1";selectRate.dispatchEvent(new Event("change"))');await browser.wait('MobileTVPlayerState().playbackRate===1 && tvVideo.playbackRate===1');await browser.click('#playerRate summary');
+  await browser.key('ArrowDown');await browser.key('ArrowRight');await browser.key('Enter');
+  await browser.wait('!playerRate.open && MobileTVPlayerState().playbackRate===1.25 && playerRateLabel.textContent==="1.25×"');
+  await browser.click('#playerRate summary');await browser.key('ArrowDown');await browser.key('Escape');
+  assert.equal(await browser.evaluate('!playerRate.open && document.activeElement===playerRate.querySelector("summary")'),true,'Escape returns focus to the speed trigger');
+  await browser.click('#playerRate summary');await browser.click('#hudTitle');assert.equal(await browser.evaluate('playerRate.open'),false,'Clicking outside closes the speed menu');
+  for(const width of [1440,768,390]){
+    await browser.viewport(width,900);await browser.click('#playerRate summary');
+    const layout=await browser.evaluate(`(()=>{const ids=['libraryPlayerTools','btnStopCast','playerRate','playerRateMenu','btnFullscreen'];return ids.map(id=>{const e=document.getElementById(id),r=e.getBoundingClientRect();return {id,left:r.left,right:r.right,width:r.width,visible:r.width>0};});})()`);
+    assert.ok(layout.every(r=>r.visible&&r.left>=-1&&r.right<=width+1),JSON.stringify({width,layout}));
+    if(width===1440)await browser.screenshot(path.resolve('data/ui-previews/compact-player-menu.png'));
+    if(width===390)await browser.screenshot(path.resolve('data/ui-previews/compact-player-mobile.png'));
+    await browser.key('Escape');
+  }
+  await browser.viewport(1440,1000);await browser.evaluate('selectRate.value="1";selectRate.dispatchEvent(new Event("change"))');
+  console.log('PASS: compact single/multiple-episode controls and keyboard speed menu remain inside desktop/tablet/mobile viewports');
+  await browser.click('#playerOptions summary');await browser.wait('playerOptions.open');
+  await browser.click('#skipSettings summary');await browser.evaluate('skipIntro.value="2";skipEnding.value="3";skipEnabled.checked=true;skipForm.requestSubmit();libraryAutoNext.checked=true');
+  await browser.screenshot(path.resolve('data/ui-previews/player-skip-settings.png'));
+  await browser.click('#btnClosePlayerOptions');assert.equal(await browser.evaluate('playerOptions.open'),false);
+  await browser.click('#btnPlayPause');await browser.wait('tvVideo.currentTime>=2 && !tvVideo.paused');
+  await browser.wait('MobileTVLibraryPlayback()?.index===1 && Number(skipIntro.value)===2 && tvVideo.currentTime>=2 && !tvVideo.paused',20000);
+  assert.equal(await browser.evaluate('Number(skipEnding.value)'),3,'The next episode retains the series skip durations');
+  await browser.evaluate('libraryAutoNext.checked=false;tvVideo.currentTime=8.5');await browser.wait('tvVideo.paused && tvVideo.currentTime>=9 && tvVideo.currentTime<11',10000);
+  await browser.evaluate('skipIntro.value="0";skipEnding.value="0";skipEnabled.checked=false;skipForm.requestSubmit();libraryAutoNext.checked=true');
+  console.log('PASS: intro seeking, series persistence and early outro advance/pause follow playback and auto-next settings');
   await browser.screenshot(path.resolve('data/ui-previews/player-buffer-progress.png'));
   await browser.evaluate('document.getElementById("btnStopCast").click()');await browser.wait('!document.body.classList.contains("casting-active")');
   await browser.click('[data-library-shelf=history]');await browser.wait('document.querySelectorAll(".collection-card").length>0');

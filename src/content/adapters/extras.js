@@ -3,6 +3,7 @@ const { resource, postResource } = require('../http');
 const { json, webUrl, cleanHeaders } = require('../format');
 const { resolvePage } = require('./websites');
 const { schedule, sortEvents } = require('../schedule');
+const { checkHls, checkFlv } = require('./platforms');
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const definitions = {
   SixV: 'https://www.xb6v.com/', YGP: 'https://www.6huo.com/',
@@ -76,11 +77,13 @@ async function list(site, { id = '', page: pg = 1, keyword = '', filters = {} } 
     r.$('.list-group-item').each((_, e) => {
       const row = r.$(e); if (row.hasClass('live-list-group-time')) { date = /\d{4}-\d{2}-\d{2}/.exec(row.text())?.[0] || ''; return; }
       const a = row.find('a[href*="/play/"],a[href$="/play"]').first(), teams = row.find('.team-name').map((_, team) => text(r.$(team).text())).get(), league = text(row.find('.game-type').first().text());
-      const match = schedule({ date, time: text(row.find('.category-game-time').first().text()), status: text(row.find('.pay-btn .btn').first().text()), league });
+      const logos=row.find('.col-xs-1 img').slice(0,2).map((_,img)=>{try{return webUrl(r.$(img).attr('data-src')||r.$(img).attr('src'),r.url);}catch{return '';}}).get();
+      const match = schedule({ date, time: text(row.find('.category-game-time').first().text()), status: text(row.find('.pay-btn .btn').first().text()), league,teams:teams.slice(0,2).map((name,i)=>({name,logo:logos[i]||''})) });
       const name = teams.length >= 2 ? teams.slice(0, 2).join(' VS ') : text(row.find('.row.d-none').text());
-      if (a.length && name) items.push({ vod_id: webUrl(a.attr('href'), r.url), vod_name: name, vod_pic: row.find('.col-xs-1 img').first().attr('data-src'), vod_remarks: [league, match.time, match.statusLabel].filter(Boolean).join(' · '), schedule: match });
+      if (a.length && name) items.push({ vod_id: webUrl(a.attr('href'), r.url), vod_name: name, vod_pic: logos[0]||'', vod_remarks: [league, match.time, match.statusLabel].filter(Boolean).join(' · '), schedule: match });
     });
     items = sortEvents(items.map(item => ({ ...item, schedule: item.schedule })));
+    site.kanqiuMatches ||= new Map();for(const item of items)site.kanqiuMatches.set(item.vod_id,{...item,expires:Date.now()+300000});while(site.kanqiuMatches.size>500)site.kanqiuMatches.delete(site.kanqiuMatches.keys().next().value);
   } else items = cards(r.$, selector, r.url, kind);
   if (kind === 'Music') r.$('div.pull-right > div > ul > li > a').each((_, e) => { const a = r.$(e); if (a.attr('href')) classes.push({ type_id: a.attr('href'), type_name: text(a.attr('title') || a.text()) }); });
   if (!items.length && !keyword && kind !== 'Kanqiu') throw new Error('未读取到内容，源站可能已变更地址或页面结构');
@@ -93,7 +96,8 @@ async function detail(site, id, signal) {
     const decoded = typeof data === 'string' ? json(Buffer.from(data.slice(6, -2), 'base64').toString()) : data;
     const episodes = (decoded?.links || []).map(row => ({ name: row.name, id: row.url }));
     if (!episodes.length) throw new Error('比赛尚未开始或没有可用线路');
-    return { vod_id: id, vod_name: '赛事直播', lines: [{ name: '直播', episodes }] };
+    const match=site.kanqiuMatches?.get(id),cached=match?.expires>Date.now()?match:null;
+    return { vod_id: id, vod_name: cached?.vod_name||'赛事直播',vod_pic:cached?.vod_pic||'',vod_content:cached?.vod_remarks||'选择可用直播线路；未开赛或已结束的赛事可能没有直播信号。',...(cached?{schedule:cached.schedule}:{}), lines: [{ name: '直播线路', episodes }] };
   }
   const { $, url } = await page(site, id, signal), kind = site.plugin;
   const result = { vod_id: id, vod_name: text($('h1.movie-name,.article_container > h1,h3.slide-info-title,.play_list h1,h1').first().text()), vod_pic: $('#post_content img,.movie-title-mpic img,img.lazy,.play_list img').first().attr('data-src') || $('#post_content img,.movie-title-mpic img,.play_list img').first().attr('src'), vod_content: text($('#height_limit,.context,.movie-title-detail,.description').first().text()), lines: [] };
@@ -145,9 +149,15 @@ async function resolve(site, episode, signal) {
   }
   if (site.plugin === 'Kanqiu') {
     const url = new URL(episode.id), direct = url.searchParams.get('url');
-    if (direct) return { url: direct, parse: 0, isLive: true, header: site.headers };
+    const media=async address=>{
+      address=webUrl(address,episode.id);
+      try{if(/\.m3u8?(?:[?#]|$)/i.test(address))address=await checkHls(address,site.headers,signal);else if(/\.flv(?:[?#]|$)/i.test(address))address=await checkFlv(address,site.headers,signal);}
+      catch(error){if(signal?.aborted)throw error;throw new Error(`此直播线路暂不可用（${error.name==='TimeoutError'?'连接超时':error.message.replace(/https?:\/\/\S+/g,'源站')}），请选择其他线路或刷新赛事。`);}
+      return {url:address,parse:0,isLive:true,header:site.headers};
+    };
+    if (direct) return media(direct);
     const r = await page(site, episode.id, signal), encoded = /encodedStr\s*=\s*['"]([^'"]+)['"]/.exec(r.text)?.[1];
-    if (encoded) return { url: json(xxteaDecrypt(Buffer.from(encoded, 'base64'), 'ABCDEFGHIJKLMNOPQRSTUVWX')).url, parse: 0, isLive: true, header: site.headers };
+    if (encoded) return media(json(xxteaDecrypt(Buffer.from(encoded, 'base64'), 'ABCDEFGHIJKLMNOPQRSTUVWX')).url);
   }
   try { return await resolvePage(site, episode.id, signal); }
   catch (error) { if (!site.browser) throw error; return site.browser.run(episode.id, { media: true, signal }); }

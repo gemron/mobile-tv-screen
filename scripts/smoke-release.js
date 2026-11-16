@@ -36,7 +36,7 @@ async function main() {
     release = path.join(unpack, path.basename(latest.folder));
     console.log('PASS: ZIP checksum and extraction to a path with spaces and Chinese characters');
   }
-  for (const file of ['MobileTV.exe', 'runtime/node.exe', 'tools/ffmpeg.exe', 'app/src/server.js', 'licenses/Node-LICENSE.txt', 'licenses/FFmpeg-LICENSE.txt']) assert.ok(fs.existsSync(path.join(release, file)), file);
+  for (const file of ['MobileTV.exe', 'runtime/node.exe', 'tools/ffmpeg.exe', 'tools/ffprobe.exe', 'app/src/server.js', 'licenses/Node-LICENSE.txt', 'licenses/FFmpeg-LICENSE.txt']) assert.ok(fs.existsSync(path.join(release, file)), file);
   assert.ok(!fs.existsSync(path.join(release, 'app', 'data')), 'No development data in release');
   assert.ok(!fs.existsSync(path.join(release, 'app', 'src', 'diagnostics')), 'No development diagnostics');
   let compared = 0;
@@ -89,7 +89,7 @@ async function main() {
   console.log('PASS: compiled launcher starts bundled Node, with an independent user data directory');
   execFileSync(executable, args, { env, cwd: sandbox, windowsHide: true, timeout: 10000 });
   assert.equal(child.exitCode, null, 'Duplicate launch keeps the original instance alive');
-  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/css/library.css', '/css/subtitles.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/js/artwork.js', '/js/danmaku.js', '/js/subtitles.js', '/js/library.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
+  for (const file of ['/', '/mobile.html', '/css/style.css', '/css/mobile.css', '/css/library.css', '/css/subtitles.css', '/js/tv.js', '/js/ui.js', '/js/mobile.js', '/js/artwork.js', '/js/danmaku.js', '/js/subtitles.js', '/js/media-tracks.js', '/js/player-controls.js', '/js/skip-segments.js', '/js/library.js', '/icons.svg', '/favicon.svg', '/vendor/hls/hls.min.js', '/vendor/mpegts/mpegts.js']) {
     const response = await request(file);
     assert.ok((await response.arrayBuffer()).byteLength > 0, file);
   }
@@ -141,6 +141,11 @@ async function main() {
   const cast = await (await request('/api/cast/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'dlna-sim' }) })).json();
   assert.equal(cast.state.protocol, 'DLNA');
   assert.equal(cast.state.streamMode, 'auto');
+  const tracks=await (await request('/api/media/tracks?sessionId='+cast.state.sessionId)).json();
+  assert.ok(tracks.audio.some(track=>track.codec==='aac'),'Bundled FFprobe identifies the actual audio track');
+  assert.ok(tracks.duration>0);assert.ok(Array.isArray(tracks.subtitles));
+  const subtitleConfig=await (await request('/api/subtitles/config')).json();assert.equal(subtitleConfig.searchAvailable,true);assert.equal(subtitleConfig.provider,'迅雷字幕');
+  console.log('PASS: packaged FFprobe discovers media tracks and subtitle search works without a preconfigured token');
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws?role=mobile`);
   try {
     await new Promise((resolve, reject) => {

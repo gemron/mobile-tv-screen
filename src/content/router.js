@@ -5,7 +5,7 @@ function createLibraryRouter(options) {
   const router = express.Router(), library = new Library(options);
   const task = handler => async (req, res) => {
     try { const result = await handler(req, res); if (!res.destroyed) res.json(result); }
-    catch (error) { if (!res.destroyed) res.status(error.status || (error.name === 'AbortError' ? 409 : 502)).json({ error: error.name === 'AbortError' ? '操作已取消或被新的请求替代' : error.message, ...(error.verifyUrl ? { verifyUrl: error.verifyUrl } : {}),...(error.requiresSave ? {requiresSave:true,saveFile:error.saveFile} : {}) }); }
+    catch (error) { if (!res.destroyed) res.status(error.status || (error.name === 'AbortError' ? 409 : 502)).json({ error: error.name === 'AbortError' ? '操作已取消或被新的请求替代' : error.message, ...(error.capacityLimited?{capacityLimited:true}:{}),...(error.verifyUrl ? { verifyUrl: error.verifyUrl } : {}),...(error.requiresSave ? {requiresSave:true,saveFile:{...error.saveFile,cleanupMode:library.cloud.cleanup.mode}} : {}) }); }
   };
   const playbackTask = handler => task(async (req, res) => {
     const controller = new AbortController(), cancel = () => { if (!res.writableEnded) controller.abort(); };
@@ -13,11 +13,14 @@ function createLibraryRouter(options) {
     try { return await handler(req, controller.signal); }
     finally { res.off('close', cancel); }
   });
-  const accountTask = handler => task(async req => { library.invalidateCloudCache();try { return { accounts: await handler(req) }; } finally { library.invalidateCloudCache(); } });
+  const accountTask = handler => task(async req => { library.cloud.cleanup.invalidate();library.invalidateCloudCache();try { return { accounts: await handler(req) }; } finally { library.cloud.cleanup.invalidate();library.invalidateCloudCache(); } });
   router.get('/config', task(() => library.summary()));
   router.get('/torrent/status', task(() => library.torrents.status()));
   router.get('/torrent/:id/:index/:name', (req,res) => library.torrents.serve(req,res));
   router.get('/accounts', task(() => ({accounts:library.accounts.summary()})));
+  router.get('/quark/cleanup', task(() => library.cloud.cleanup.summary()));
+  router.post('/quark/cleanup/settings', task(req => library.cloud.cleanup.configure(req.body?.mode)));
+  router.post('/quark/cleanup', playbackTask((req,signal) => library.cloud.cleanup.clean('manual',{signal})));
   router.post('/accounts', accountTask(req => library.accounts.set(req.body?.provider,req.body||{})));
   router.post('/accounts/login', task(req => library.accounts.login(req.body?.provider)));
   router.post('/accounts/sync', accountTask(req => library.accounts.sync(req.body?.provider)));

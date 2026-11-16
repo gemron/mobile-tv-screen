@@ -39,9 +39,11 @@ class Library {
     this.browser = new SourceBrowser(dataDir);
     this.runtime = new RuntimeData(dataDir);
     this.accounts = new Accounts(dataDir,this.browser); this.cloud = new Cloud(this.accounts,this.browser);
+    this.cloud.cleanup.activeGuard = () => { const state=castState.getSnapshot(); return ['IDLE','STOPPED'].includes(state.status) || this.cloud.cleanup.active?.sessionId===state.sessionId || this.cloud.cleanup.finishedSessionId===state.sessionId; };
     this.accounts.validator = (provider,credentials,signal) => this.cloud.checkAccount(provider,credentials,signal);
     this.torrents = new Torrents(dataDir);
     this.onCastChange = state => {
+      this.cloud.cleanup.stateChanged(state);
       this.trackProgress(state);
       if (['IDLE', 'STOPPED', 'PAUSED'].includes(state.status)) this.collection.flush();
       if (this.torrents.active?.selected >= 0 && (state.protocol !== 'Library' || !state.url.startsWith('/api/library/torrent/') || ['IDLE', 'STOPPED'].includes(state.status))) this.torrents.stop().catch(() => {});
@@ -49,6 +51,8 @@ class Library {
     castState.on('stateChange', this.onCastChange);
     this.onProgress = state => this.trackProgress(state);
     castState.on('progress', this.onProgress);
+    this.onEnded = state => this.cloud.cleanup.ended(state.sessionId);
+    castState.on('mediaEnded', this.onEnded);
     this.fetchResource = fetchResource;
     this.config = null; this.sites = []; this.liveSources = []; this.parsers = []; this.repositories = [];
     this.cache = new Map(); this.cacheBytes = 0; this.generation = 0; this.cloudGeneration = 0; this.playback = null; this.importController = null; this.playController = null;
@@ -293,12 +297,14 @@ class Library {
     signal?.addEventListener('abort', abort, { once: true });
     const timeout = setTimeout(() => controller.abort(new DOMException('片源解析超时', 'TimeoutError')), this.playTimeoutMs).unref();
     const wait = promise => waitForPlayback(promise, controller.signal);
+    let cloudLease;
     try {
     const site = this.site(siteKey);
     this.cloudPlayController=/^cloud-/.test(site.adapter||'')?controller:null;
     const video = await wait(this.detail(siteKey, vodId, false, controller.signal));
     const group = video.lines[Number(line)], episode = group?.episodes[Number(index)];
     if (!episode) throw failure('所选播放线路或剧集不存在');
+    cloudLease=await wait(this.cloud.holdEpisode(episode.id,controller.signal));
     if(controller.signal.aborted||(/^cloud-/.test(site.adapter||'')&&cloudGeneration!==this.cloudGeneration))throw failure('网盘账号状态或播放选择已变化，请重新播放',409);
     let resolved;
     if(saveToDrive===true){
@@ -310,6 +316,7 @@ class Library {
     if (controller.signal.aborted || generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
     this.trackProgress(castState.getSnapshot());
     const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType, resolved.playlistContext), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true,startPosition:Math.max(0,Math.min(604800,Number(resumePosition)||0)),startPositionUnit:'seconds' });
+    if(cloudLease)this.cloud.cleanup.activate(cloudLease.key,cloudLease.fid,state.sessionId);
     this.subtitles?.setSources(state.sessionId, resolved.subtitles, site.api, resolved.url, resolved.headers);
     const entry = this.collection.record({ kind: 'vod', sourceId: this.sourceId, siteKey, vodId, title: video.title, picture: video.picture, episode: episode.name, lineName: group.name, line: Number(line), index: Number(index), parserKey, quality: resolved.quality, position: state.position, duration: 0 });
     this.playback = { kind: 'vod', sourceId: this.sourceId, historyId: entry.id, siteKey, vodId, title: video.title, line: Number(line), index: Number(index), parserKey, qualities:resolved.qualities,quality:resolved.quality,episodes: group.episodes.map(item => item.name), sessionId: state.sessionId };
@@ -317,7 +324,7 @@ class Library {
     } catch (error) {
       if (controller.signal.reason?.name === 'TimeoutError' || !controller.signal.aborted && (error.name === 'AbortError' || error.name === 'TimeoutError' || error.code === 'ETIMEDOUT')) throw failure('片源解析超时，请重试本集或更换线路。', 504);
       throw error;
-    } finally { clearTimeout(timeout); signal?.removeEventListener('abort', abort); }
+    } finally { cloudLease?.release(); clearTimeout(timeout); signal?.removeEventListener('abort', abort); }
   }
 
   async playLive({ sourceKey, channelId, line = 0 }) {
@@ -347,7 +354,7 @@ class Library {
     return this.playLive({ sourceKey: current.sourceKey, channelId: next.id });
   }
 
-  close() { this.trackProgress(castState.getSnapshot()); this.collection.flush(); castState.off('stateChange',this.onCastChange); castState.off('progress',this.onProgress); this.importController?.abort(); this.playController?.abort(); this.cache.clear(); this.cacheBytes = 0; return Promise.allSettled([this.browser.close(),this.torrents.close()]); }
+  close() { this.trackProgress(castState.getSnapshot()); this.collection.flush(); castState.off('stateChange',this.onCastChange); castState.off('progress',this.onProgress); castState.off('mediaEnded',this.onEnded); this.importController?.abort(); this.playController?.abort(); this.cache.clear(); this.cacheBytes = 0; return Promise.allSettled([this.browser.close(),this.torrents.close(),this.cloud.cleanup.close()]); }
 }
 
 module.exports = { Library };

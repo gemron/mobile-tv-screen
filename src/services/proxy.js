@@ -9,6 +9,7 @@ const castState = require('./castState');
 const { SegmentCache } = require('./segmentCache');
 const { OriginalRangeCache } = require('./originalRangeCache');
 const { OriginalHttpPool } = require('./originalHttpPool');
+const { MediaTracks } = require('./mediaTracks');
 const { RemuxBuffer } = require('./remuxBuffer');
 const mediaHeaders = require('./mediaHeaders');
 const { HlsAdFilter } = require('./hlsAdFilter');
@@ -215,10 +216,31 @@ function createProxyRouter(options = {}) {
     originalCache.stats = () => ({ ...stats(), transport: originalPool.stats() });
   }
   router.originalCache = originalCache;
+  let tracksPort = 0;
+  const tracks = router.mediaTracks = new MediaTracks({ open: openUpstreamStream, snapshot: () => castState.getSnapshot(), resolveSource: state => {
+    const base='http://127.0.0.1:'+tracksPort;
+    let current=new URL(state.url,base),headers={},context='';
+    for(let depth=0;depth<4&&current.origin===base&&['/api/proxy','/api/transcode'].includes(current.pathname);depth++){
+      const target=current.searchParams.get('url');if(!target)break;
+      context=current.searchParams.get('headerContext')||'';
+      const scoped=context?mediaHeaders.get(context,target):{};
+      if(!scoped)throw Object.assign(new Error('媒体凭据已过期，请重新选择影片'),{status:410});
+      headers={...resolveUpstreamHeaders(context?'':target,current.searchParams.get('referer')||''),...scoped};current=new URL(target,base);
+    }
+    if(!['http:','https:'].includes(current.protocol))throw new Error('此媒体暂不支持内置轨道读取');
+    const playlist=/m3u8(?:$|\?)/i.test(current.href)||/mpegurl/i.test(state.metadata?.mimeType||'');
+    return {url:playlist?base+'/api/proxy?'+new URLSearchParams({url:current.href,...(context?{headerContext:context}:{}),hls:'1'}):current.href,headers,playlist};
+  }});
+  const trackTask = work => async(req,res)=>{
+    tracksPort=req.socket.localPort;const controller=new AbortController(),abort=()=>{if(!res.writableEnded)controller.abort();};res.on('close',abort);
+    try{const result=await work(req,controller.signal);if(!res.destroyed)res.json(result);}catch(error){if(!res.destroyed)res.status(error.status||(['AbortError','TimeoutError'].includes(error.name)?409:502)).json({error:error.name==='TimeoutError'?'轨道读取超时，请重试':error.message});}finally{res.off('close',abort);}
+  };
+  router.get('/media/tracks',trackTask(async(req,signal)=>{const result=await tracks.list(req.query.sessionId,signal);signal.throwIfAborted();castState.setMediaDuration(result);return result;}));
+  router.post('/media/subtitles',express.json({limit:'4kb'}),trackTask((req,signal)=>tracks.subtitles(req.body?.sessionId,req.body?.index,req.body?.position,signal)));
   const remuxBuffers = new Set();
   router.remuxBufferStats = (sessionId = castState.getSnapshot().sessionId) => {
     const active = [...remuxBuffers].filter(item => item.sessionId === sessionId && !item.buffer.destroyed);
-    return { active: active.length > 0, streams: active.length, bytes: active.reduce((sum, item) => sum + item.buffer.stats().bytes, 0), maxBytes: active.reduce((sum, item) => sum + item.buffer.maxBytes, 0) };
+    return { active: active.length > 0, streams: active.length, bytes: active.reduce((sum, item) => sum + item.buffer.stats().bytes, 0), maxBytes: active.reduce((sum, item) => sum + item.buffer.maxBytes, 0), buffers: active.slice(-8).map(item=>({requestId:item.requestId,start:item.start,...item.buffer.stats()})) };
   };
   const adFilter = options.adFilter || new HlsAdFilter({dataDir:options.dataDir});
   router.adFilter = adFilter;
@@ -406,6 +428,8 @@ function createProxyRouter(options = {}) {
     const customHeaders = headerContext ? mediaHeaders.get(headerContext,targetUrl) : {};
     if (!customHeaders) { res.status(410).end('播放请求已过期，请重新选择节目'); return; }
     const reencode = req.query.reencode === '1';
+    const audioTrack = /^\d{1,2}$/.test(req.query.audioTrack||'') ? Number(req.query.audioTrack) : null;
+    const burnSubtitle = /^\d{1,2}$/.test(req.query.burnSubtitle||'') ? Number(req.query.burnSubtitle) : null;
     let audioUrl = String(req.query.audioUrl || '');
     if (audioUrl) {
       try { if (!['http:', 'https:'].includes(new URL(audioUrl).protocol)) throw new Error(); }
@@ -447,7 +471,11 @@ function createProxyRouter(options = {}) {
       args.push('-i', audioUrl, '-map', '0:v:0', '-map', '1:a:0?', '-shortest');
     }
 
-    if (reencode) {
+    if(!audioUrl){
+      if(burnSubtitle!==null)args.push('-filter_complex',`[0:s:${burnSubtitle}][0:v:0]scale2ref[s][base];[base][s]overlay=eof_action=pass[v]`,'-map','[v]','-map',audioTrack!==null?'0:a:'+audioTrack+'?':'0:a:0?');
+      else if(audioTrack!==null)args.push('-map','0:v:0','-map','0:a:'+audioTrack+'?');
+    }
+    if (reencode || burnSubtitle!==null) {
       args.push(
         '-c:v',
         'libx264',
@@ -466,6 +494,9 @@ function createProxyRouter(options = {}) {
       // Video copy = zero CPU video re-encoding while remuxing to fragmented MP4
       args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k');
     }
+    // Browser output always has a stereo AAC track, including AC-3 / DTS 5.1
+    // sources whose dialogue would otherwise depend on system surround routing.
+    args.push('-ac','2');
 
     // A copied video keeps its keyframe preroll while encoded audio is trimmed
     // to the requested seek time. Wait for initial packets before writing the
@@ -476,7 +507,8 @@ function createProxyRouter(options = {}) {
 
     const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     const snapshot = castState.getSnapshot(), reserve = new RemuxBuffer({ live: Boolean(snapshot.metadata?.isLive) });
-    const buffered = { sessionId: snapshot.sessionId, buffer: reserve }; remuxBuffers.add(buffered);
+    const requestId=/^[a-z0-9_-]{1,80}$/i.test(String(req.query.requestId||''))?String(req.query.requestId):'';
+    const buffered = { sessionId: snapshot.sessionId, requestId, start:startPosition, buffer: reserve }; remuxBuffers.add(buffered);
     reserve.once('close', () => remuxBuffers.delete(buffered));
     let closed = false;
 

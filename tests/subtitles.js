@@ -18,9 +18,10 @@ const srt='1\n00:00:01,250 --> 00:00:03,000\n你好 <b>world</b>\n第二行\n\n2
   const manual='b'.repeat(32),subscription='a'.repeat(32),requests=[];let waitSearch,started;
   const request=async(address,options)=>{
     const url=new URL(address);requests.push({host:url.host,authorization:options.headers?.authorization,urlToken:url.searchParams.has('token')});
+    if(url.hostname==='api-shoulei-ssl.xunlei.com'){assert.equal(options.headers.authorization,undefined);return {text:JSON.stringify({code:0,data:[{name:'免费中文字幕.srt',url:'https://files.test/free.srt',ext:'srt',languages:['简体']},{name:'Unsupported.exe',url:'https://files.test/ignore.exe',ext:'exe'}]})};}
     if(url.hostname==='api.assrt.test'){
       assert.equal(url.searchParams.has('token'),false);assert.match(options.headers.authorization,/^Bearer [ab]{32}$/);
-      if(url.pathname.endsWith('/search')){if(url.searchParams.get('q')==='slow fixture'){started?.();await new Promise(resolve=>{waitSearch=resolve;});}return {text:JSON.stringify({status:0,sub:{subs:[{id:123456,native_name:'Fixture 字幕',lang:{desc:'中英'},subtype:'SRT'}]}})};}
+      if(url.pathname.endsWith('/search')){if(url.searchParams.get('q')==='quota fixture')return {text:JSON.stringify({status:30900})};if(url.searchParams.get('q')==='slow fixture'){started?.();await new Promise(resolve=>{waitSearch=resolve;});}return {text:JSON.stringify({status:0,sub:{subs:[{id:123456,native_name:'Fixture 字幕',lang:{desc:'中英'},subtype:'SRT'}]}})};}
       return {text:JSON.stringify({status:0,sub:{subs:[{id:123456,filelist:[{f:'中文.srt',url:'https://files.test/test.srt'},{f:'多文件.zip',url:'https://files.test/test.zip'}]}]}})};
     }
     if(url.hostname==='files.test')assert.equal(options.headers.authorization,undefined);
@@ -31,8 +32,11 @@ const srt='1\n00:00:01,250 --> 00:00:03,000\n你好 <b>world</b>\n第二行\n\n2
   const service=new Subtitles({dataDir:directory,request,apiBase:'https://api.assrt.test/'});service.setSubscriptionToken(subscription);assert.equal(service.config().tokenSource,'subscription');assert.ok(!JSON.stringify(service.config()).includes(subscription));service.configure(manual);assert.equal(service.config().tokenSource,'manual');assert.equal(service.effectiveToken(),manual);service.configure('');assert.equal(service.effectiveToken(),subscription);
   assert.equal((await call('config')).configured,false);assert.equal((await call('config',{token:'invalid'})).status,400);
   const session=castState.setMedia({url:'https://movie.test/movie.mp4',protocol:'Library',mediaType:'video',autoPlay:false,metadata:{title:'Subtitle fixture'}}).sessionId;
-  assert.equal((await call('search',{sessionId:session,keyword:'fixture'})).status,428);
+  const free=await call('search',{sessionId:session,keyword:'fixture'});assert.equal(free.status,200);assert.equal(free.provider,'迅雷字幕');assert.equal(free.items.length,1);assert.match(free.items[0].id,/^thunder:/);assert.ok(!JSON.stringify(free).includes('files.test'));
+  const freeDetail=await call('detail',{sessionId:session,id:free.items[0].id});assert.equal(freeDetail.files.length,1);assert.equal((await call('load',{sessionId:session,id:freeDetail.files[0].id})).cues[0].text,cues[0].text);
   const cfg=await call('config',{token:manual});assert.equal(cfg.configured,true);assert.ok(!JSON.stringify(cfg).includes(manual));
+  assert.equal((await call('detail',{sessionId:session,id:free.items[0].id})).status,410,'Changing search credentials invalidates old free result handles');
+  const fallback=await call('search',{sessionId:session,keyword:'quota fixture'});assert.equal(fallback.provider,'迅雷字幕');assert.match(fallback.notice,/Assrt/);
   const found=await call('search',{sessionId:session,keyword:'fixture'});assert.equal(found.items.length,1);assert.equal(found.items[0].lang,'中英');
   const before=requests.length;await call('search',{sessionId:session,keyword:'fixture'});assert.equal(requests.length,before,'search uses a bounded cache');
   const detail=await call('detail',{sessionId:session,id:123456});assert.equal(detail.files.length,2);assert.ok(!JSON.stringify(detail).includes('files.test'));

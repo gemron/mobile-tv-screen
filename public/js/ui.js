@@ -2,6 +2,7 @@
   'use strict';
   const $ = (id) => document.getElementById(id);
   const bind = (id, handler) => $(id)?.addEventListener('click', handler);
+  bind('btnClosePlayerOptions',()=>{const settings=$('playerOptions');if(settings){settings.open=false;settings.querySelector('summary')?.focus({preventScroll:true});}});
   let toastTimer;
   let logTrigger;
   document.documentElement.dataset.inputMode='pointer';

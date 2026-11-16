@@ -4,9 +4,9 @@
 
 ## 默认搜索设置
 
-参考 [5.8.8 的字幕设置](https://github.com/FongMi/TV/blob/097917c1c5eb6c94a14b2ede3f371a681dbb751f/app/src/main/java/com/fongmi/android/tv/setting/SubtitleSetting.java)，优先读取手动设置的 Token，否则读取当前订阅顶层的 `assrt` 字段。这里不是提取或复制参考应用作者的个人密钥；订阅没有提供时，需要在面板的「字幕搜索设置」填写自己有权使用的 Assrt Token。
+参考 [5.8.8 的字幕设置](https://github.com/FongMi/TV/blob/097917c1c5eb6c94a14b2ede3f371a681dbb751f/app/src/main/java/com/fongmi/android/tv/setting/SubtitleSetting.java)，优先读取手动设置的 Token，否则读取当前订阅顶层的 `assrt` 字段。没有 Token 时默认使用迅雷字幕免费接口，无需配置；Assrt 不可用或没有结果时也会尝试免费接口，不复制其他应用的个人密钥。
 
-字幕搜索由 [assrt.net](https://assrt.net/) 提供，协议见[官方文档](https://assrt.net/api/doc)。只有点击搜索才会将输入的搜索词发送到该服务；不会上传视频、账号 Cookie 或播放地址。服务有配额和可用性限制，程序缓存短期搜索结果并提供分页、取消和错误提示。
+字幕搜索由 [assrt.net](https://assrt.net/)（[官方文档](https://assrt.net/api/doc)）或[迅雷字幕](https://www.xunlei.com/)提供；迅雷的公开接口用法可参考 [MeiamSubtitles](https://github.com/91270/MeiamSubtitles/blob/master/Emby.MeiamSub.Thunder/ThunderProvider.cs)。只有点击搜索才会将输入的搜索词发送到服务；不会上传视频、账号 Cookie 或播放地址，免费接口请求不携带 Assrt 凭据。服务有配额和可用性限制，不保证所有片名都有结果；程序缓存短期搜索结果并提供分页、取消和错误提示。
 
 手动 Token 保存在运行数据目录的 `subtitles.json`，不会在配置摘要中返回，也不会打包或提交。清除手动设置会恢复订阅提供的值。切换订阅或 Token 后，旧搜索缓存失效。
 
@@ -18,7 +18,17 @@
 
 ## 格式、同步与边界
 
-支持 SRT、WebVTT、ASS 和 SSA 的对白及时间，识别 UTF-8／UTF-16，必要时按 GB18030 解码中文。ASS 的特效、字体附件和排版不会完整还原；RAR、7z、PGS／VobSub 图像字幕、自动提取 MKV 内嵌字幕暂不支持。烧录到画面的字幕无法通过本功能关闭。
+支持 SRT、WebVTT、ASS 和 SSA 的对白及时间，识别 UTF-8／UTF-16，必要时按 GB18030 解码中文。ASS 的特效、字体附件和排版不会完整还原；外部 RAR／7z 和独立 PGS／VobSub 文件暂不支持。烧录到画面的字幕无法通过本功能关闭。
+
+## 内置轨道（1.2.3）
+
+CC 面板采用双栏半透明布局，左侧选择内置字幕、调整延迟与字号，右侧在线搜索；小窗口改为单栏并保留细滚动条。「内置字幕」读取容器中的实际字幕流，支持 MP4 `mov_text`、MKV SRT／ASS 等文字字幕。
+
+带字幕 CueRelativePosition 索引的 MKV 直接按范围读取选中轨道的字幕块，跳过音视频负载；保留原始绝对时间与跨窗口对白。其他容器回退为短窗口 FFmpeg 提取。跳转后重新读取，不预先下载整部影片；请求有流量、大小和时间上限。读取显示独立进度与取消入口，失败后点击语言重试，不在每次时间更新时重复发起失败请求。真实 4K MKV 样本约 7 秒、不到 1 MiB 获取 36 条字幕；具体时间随文件索引和网络变化。
+
+PGS／VobSub 等内置图像字幕提供「兼容显示」选择：会将字幕合入视频并转码，可能增加 CPU 占用、影响 HDR 或原画效果，不会自动启用。PGS 已用 FFmpeg 官方样本验证实际画面叠加；其他图像编码仍取决于 FFmpeg 解码支持。测试样本不会随应用发行。
+
+设置里的「音轨」显示实际语言、编码和声道。未标注语言的音轨保持未标注，不根据文件名猜测。选择音轨会保留播放进度并转换为 AAC 立体声；自动模式识别 AC-3／DTS 等不兼容音频后使用相同处理。普通文字字幕与音频兼容封装仍复制视频码流，只有图像字幕兼容模式或明确选择视频转码时改变视频编码。
 
 字幕切换不会重载视频。兼容封装跳转后，字幕使用整部影片的绝对时间，再换算为当前片段的相对时间；播放延迟和字幕偏移分别处理。同一影片更换画质时保留已加载字幕，换集清除旧字幕并取消旧请求，迟到的搜索／下载结果不能覆盖新影片。
 

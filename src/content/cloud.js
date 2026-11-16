@@ -7,6 +7,7 @@ const {resource,postJson,postResource}=require('./http');
 const {webUrl,json}=require('./format');
 const {extract}=require('./literals');
 const {loginUrls}=require('./accounts');
+const {QuarkCleanup}=require('./quark-cleanup');
 const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const QUARK_DESKTOP_UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.56 Chrome/100.0.4896.160 Electron/18.3.5.12-a038f7b798 Safari/537.36 Channel/pckk_other_ch';
 const apiBases={quark:'https://drive-pc.quark.cn/1/clouddrive/',uc:'https://pc-api.uc.cn/1/clouddrive/',ali:'https://api.aliyundrive.com/',baidu:'https://pan.baidu.com/'};
@@ -27,8 +28,25 @@ class Cloud{
     this.accounts=accounts;this.browser=browser;this.endpoints={...apiBases,bili:'https://api.bilibili.com/',...endpoints};this.shareSaves=new Map();this.shareSaving=new Map();
     this.shareFile=accounts.file?path.join(path.dirname(accounts.file),'cloud-shares.json'):null;
     try{const records=json(fs.readFileSync(this.shareFile,'utf8'));for(const [key,value]of Object.entries(records))if(/^[a-f0-9]{64}$/.test(key)&&value?.provider==='quark'&&(typeof value.fid==='string'||typeof value.taskId==='string'))this.shareSaves.set(key,value);}catch{}
+    this.cleanup=new QuarkCleanup(this);
   }
   shareKey(file){return createHash('sha256').update(JSON.stringify([file.provider,file.share,file.fid])).digest('hex');}
+  async recordKey(file){
+    const base=this.shareKey(file),owner=file.provider==='quark'?await this.cleanup.owner():'';
+    if(!owner)return base;
+    const scoped=createHash('sha256').update(base+':'+owner).digest('hex'),legacy=this.shareSaves.get(base);
+    return this.shareSaves.has(scoped)?scoped:legacy&&(!legacy.ownerHash||legacy.ownerHash===owner)?base:scoped;
+  }
+  async holdEpisode(id,signal){
+    signal?.throwIfAborted();
+    if(!String(id).startsWith('cloud:'))return null;
+    const file=decode(id);if(file.provider!=='quark')return null;
+    const key=file.drive?[...this.shareSaves].find(([,r])=>r.fid===file.fid)?.[0]||'':await this.recordKey(file);
+    await this.cleanup.waitForDeletion(key);
+    signal?.throwIfAborted();
+    const release=this.cleanup.hold(key),abort=()=>release();signal?.addEventListener('abort',abort,{once:true});
+    return {key,fid:file.drive?file.fid:'',release:()=>{signal?.removeEventListener('abort',abort);release();}};
+  }
   rememberShare(key,value){
     this.shareSaves.delete(key);if(value)this.shareSaves.set(key,value);while(this.shareSaves.size>500)this.shareSaves.delete(this.shareSaves.keys().next().value);
     if(this.shareFile){fs.mkdirSync(path.dirname(this.shareFile),{recursive:true});fs.writeFileSync(this.shareFile+'.tmp',JSON.stringify(Object.fromEntries(this.shareSaves)),{mode:0o600});fs.renameSync(this.shareFile+'.tmp',this.shareFile);}
@@ -36,21 +54,23 @@ class Cloud{
   async saveShare(id,{consent=false,signal}={}){
     if(consent!==true)throw Object.assign(new Error('请先确认将所选文件保存到你的网盘'),{status:400});
     const file=decode(id);if(file.provider!=='quark'||file.drive||!file.share||!file.fid||!file.fileToken)throw Object.assign(new Error('此线路暂不支持保存播放'),{status:422});
-    const key=this.shareKey(file);if(this.shareSaving.has(key))return this.shareSaving.get(key);
-    const work=this.saveSharedFile(file,signal);this.shareSaving.set(key,work);
+    const key=await this.recordKey(file);await this.cleanup.waitForDeletion(key);if(this.shareSaving.has(key))return this.shareSaving.get(key);
+    const work=this.saveSharedFile(file,signal,key);this.shareSaving.set(key,work);
     try{return await work;}finally{if(this.shareSaving.get(key)===work)this.shareSaving.delete(key);}
   }
-  async saveSharedFile(file,signal){
-    const key=this.shareKey(file),bounded=signal?AbortSignal.any([signal,AbortSignal.timeout(45000)]):AbortSignal.timeout(45000);
+  async saveSharedFile(file,signal,key,spaceRetried=false){
+    const bounded=signal?AbortSignal.any([signal,AbortSignal.timeout(45000)]):AbortSignal.timeout(45000);
     bounded.throwIfAborted();
+    try{
     let record=this.shareSaves.get(key);
     if(record?.fid)return this.resolveDrive({provider:file.provider,fid:record.fid},bounded);
     if(!record?.taskId){
       await this.accounts.check(file.provider,bounded);
+      const destination=await this.cleanup.destination(bounded);
       const fresh=await this.freshSharedFile(file,bounded);bounded.throwIfAborted();
-      const saved=await this.request(file.provider,'share/sharepage/save',{pwd_id:file.share,stoken:fresh.token,fid_list:[file.fid],fid_token_list:[fresh.fileToken],to_pdir_fid:'0',scene:'link'},{},bounded);
+      const saved=await this.request(file.provider,'share/sharepage/save',{pwd_id:file.share,stoken:fresh.token,fid_list:[file.fid],fid_token_list:[fresh.fileToken],to_pdir_fid:destination.parent,scene:'link'},{},bounded);
       if(!saved.data?.task_id)throw new Error('网盘未返回保存任务，请在官方页面检查保存结果后重试');
-      record={provider:file.provider,taskId:String(saved.data.task_id)};this.rememberShare(key,record);
+      record={provider:file.provider,taskId:String(saved.data.task_id),...destination,name:String(file.name||''),size:Number(file.size)||0,createdAt:Date.now()};this.rememberShare(key,record);
     }
     for(let attempt=0;attempt<35;attempt++){
       let response;
@@ -61,12 +81,20 @@ class Cloud{
       if(Number(task.status)===2){
         const ids=task.save_as?.save_as_top_fids||task.save_as_top_fids;
         if(!Array.isArray(ids)||ids.length!==1)throw new Error('文件已保存，但未取得唯一文件编号，请从“我的网盘”选择文件播放');
-        record={provider:file.provider,fid:String(ids[0])};this.rememberShare(key,record);
+        const {taskId,...info}=record;record={...info,provider:file.provider,fid:String(ids[0]),lastUsedAt:Date.now()};this.rememberShare(key,record);
         return this.resolveDrive({provider:file.provider,fid:record.fid},bounded);
       }
       await delay(750,undefined,{signal:bounded});
     }
     throw Object.assign(new Error('网盘保存仍在处理中，请稍后重试；不会重复提交同一保存任务'),{status:428});
+    }catch(error){
+      if(error.capacityLimited&&!spaceRetried&&this.cleanup.enabled('space')){
+        this.rememberShare(key,null);
+        let freed;try{freed=await this.cleanup.clean('space',{signal:bounded,targetBytes:Number(file.size)||Infinity});}catch(cleanupError){bounded.throwIfAborted();error.message+=' 自动清理未完成：'+cleanupError.message;}
+        if(freed?.removed>0)return this.saveSharedFile(file,signal,key,true);
+      }
+      throw error;
+    }
   }
   async headers(provider){const cookie=await this.accounts.cookie(provider,this.endpoints[provider]);return {'user-agent':UA,referer:loginUrls[provider],origin:new URL(loginUrls[provider]).origin,...(cookie?{cookie}:{})};}
   credentialOrigin(provider,url){
@@ -104,10 +132,12 @@ class Cloud{
     try{return await this.browser.run(file.url,{media:true,signal,selectText:file.name||'',folders:file.folders||[],timeout:25000});}
     catch(error){signal?.throwIfAborted();if(error.requiresSave)throw Object.assign(error,{saveFile:{name:file.name,size:Number(file.size)||0}});throw Object.assign(new Error('未取得'+({quark:'夸克',uc:'UC',ali:'阿里',baidu:'百度'}[file.provider]||'网盘')+'分享媒体，请在官方页面确认此文件是否可播放后重试'),{status:428,verifyUrl:file.url});}
   }
-  async request(provider,path,body,extra={},signal,retried=false){
+  async request(provider,path,body,extra={},signal,retried=false,beforeSend){
     const url=new URL(path,this.endpoints[provider]);
     if(provider==='quark'||provider==='uc'){url.searchParams.set('pr',provider==='quark'?'ucpro':'UCBrowser');url.searchParams.set('fr','pc');url.searchParams.set('uc_param_str','');}
     const headers={...await this.headers(provider),...extra};
+    signal?.throwIfAborted();
+    if(beforeSend&&beforeSend()!==true)throw Object.assign(new Error('文件已进入播放或保存，本次清理已跳过'),{status:409});
     try {
       const response=body===undefined?await resource(url.href,{headers,signal}):await postResource(url.href,body,{headers,signal});
       const result=json(response.text);
@@ -219,8 +249,8 @@ class Cloud{
   async resolve(id,signal){
     const file=decode(id),provider=file.provider;
     if(file.drive)return this.resolveDrive(file,signal);
-    const saved=this.shareSaves.get(this.shareKey(file));
-    if(saved?.fid){try{return await this.resolveDrive({provider,fid:saved.fid},signal);}catch(error){signal?.throwIfAborted();if(error.status===428||!(/HTTP (403|404)|not.?found|不存在/i.test(error.message)))throw error;this.rememberShare(this.shareKey(file),null);}}
+    const savedKey=await this.recordKey(file),saved=this.shareSaves.get(savedKey);
+    if(saved?.fid){try{const result=await this.resolveDrive({provider,fid:saved.fid},signal);this.rememberShare(savedKey,{...saved,lastUsedAt:Date.now()});return result;}catch(error){signal?.throwIfAborted();if(error.status===428||!(/HTTP (403|404)|not.?found|不存在/i.test(error.message)))throw error;this.rememberShare(savedKey,null);}}
     if(provider==='baidu'){
       if(file.dlink)return this.mediaResult(provider,file.dlink);
       return this.browserShare(file,signal);

@@ -38,6 +38,8 @@ class CastStateService extends EventEmitter {
       rotation: 0, // 0 | 90 | 180 | 270
       fitMode: 'contain', // 'contain' | 'cover' | 'fill'
       streamMode: 'auto', // 'auto' | 'direct' | 'proxy' | 'transcode'
+      audioTrack: null,
+      burnSubtitle: null,
       startPosition: 0, // raw AirPlay Start-Position hint (0..1 ratio or seconds)
       startPositionUnit: 'auto',
       updatedAt: Date.now(),
@@ -165,6 +167,8 @@ class CastStateService extends EventEmitter {
     this.state.startPositionUnit = startPositionUnit;
     this.state.playbackRate = 1;
     this.state.streamMode = streamMode;
+    this.state.audioTrack = null;
+    this.state.burnSubtitle = null;
     this.state.status = autoPlay ? 'PLAYING' : 'PAUSED';
     this.state.updatedAt = Date.now();
     this._anchorTimeMs = performance.now();
@@ -288,8 +292,16 @@ class CastStateService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  setDisplayOptions({ rotation, fitMode, streamMode, playbackRate,danmakuEnabled }) {
+  setMediaDuration({ sessionId, duration }) {
+    if(sessionId!==this.state.sessionId||!this.state.url||this.state.metadata.isLive||!Number.isFinite(duration)||duration<=0||duration>604800)return;
+    if(this.state.metadata.duration===duration&&this.state.duration===duration)return;
+    this.state.metadata.duration=duration;this.state.duration=duration;
+    this.emit('stateChange',this.getSnapshot());
+  }
+
+  setDisplayOptions({ rotation, fitMode, streamMode, playbackRate,danmakuEnabled,audioTrack,burnSubtitle }) {
     let changed = false;
+    for(const [name,value]of Object.entries({audioTrack,burnSubtitle}))if(value!==undefined&&(value===null||Number.isInteger(value)&&value>=0&&value<64)){this.state[name]=value;changed=true;}
     if(typeof danmakuEnabled==='boolean'&&danmakuEnabled!==this.state.danmakuEnabled){this.state.danmakuEnabled=danmakuEnabled;changed=true;}
     if (rotation !== undefined && [0, 90, 180, 270].includes(Number(rotation))) {
       this.state.rotation = Number(rotation);

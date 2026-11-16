@@ -1,0 +1,20 @@
+const fs=require('fs'),path=require('path'),vm=require('vm'),assert=require('assert/strict');
+(async()=>{
+ const elements=new Map(),storage=new Map(),controls=[];let clock=10000,position=0,advance=false,attempts=0;
+ const series={kind:'vod',title:'Series',sourceId:'source',siteKey:'site',vodId:'series-id'};
+ const element=id=>{if(!elements.has(id))elements.set(id,{value:0,checked:false,hidden:false,paused:false,readyState:3,listeners:{},addEventListener(event,fn){this.listeners[event]=fn;}});return elements.get(id);};
+ const state={sessionId:1,url:'https://fixture.test/one.mp4',mediaType:'video',protocol:'Library',status:'PLAYING',metadata:{title:'Episode one'}};
+ const window={MobileTVPlaybackPosition:()=>position,MobileTVPlaybackDuration:()=>100,MobileTVLibraryPlayback:()=>series,MobileTVLibrarySkipNext:async()=>{attempts++;return advance;},MobileTVPlayerState:()=>state,MobileTVPlaybackControl:command=>{controls.push(command);if(command.action==='pause')element('tvVideo').paused=true;},MobileTVUI:{toast(){}}};
+ const context=vm.createContext({window,document:{getElementById:element},localStorage:{getItem:key=>storage.get(key),setItem:(key,value)=>storage.set(key,value)},Date:{now:()=>clock},Number,JSON,Math});
+ vm.runInContext(fs.readFileSync(path.join(__dirname,'../public/js/skip-segments.js'),'utf8'),context);
+ const emit=event=>element('tvVideo').listeners[event](),save=(intro,ending,enabled=true)=>{element('skipIntro').value=intro;element('skipEnding').value=ending;element('skipEnabled').checked=enabled;element('skipForm').listeners.submit({preventDefault(){}});};
+ save(5,3);assert.equal(controls[0].action,'seek');assert.equal(controls[0].position,5);assert.equal(controls.length,1);await emit('timeupdate');assert.equal(controls.length,1,'Intro skips once even before the seek acknowledgment');
+ clock+=4000;position=1;await emit('seeking');await emit('timeupdate');assert.equal(controls.length,1,'Manual rewind can watch the intro without repeated forced seeks');
+ position=98;advance=true;await emit('timeupdate');await emit('timeupdate');assert.equal(attempts,1,'Outro advances only once');
+ state.sessionId=2;state.url='https://fixture.test/two.mp4';state.metadata.title='Episode two';window.MobileTVSkips.setState(state);assert.equal(element('skipIntro').value,5);assert.equal(element('skipEnding').value,3,'Skip settings follow the series rather than the episode title');
+ position=98;advance=false;await emit('timeupdate');assert.equal(controls.at(-1).action,'pause','When auto-next is unavailable, outro pauses instead');
+ const saved=storage.get('mobiletv-skip-settings-v1');save(98,3);assert.equal(storage.get('mobiletv-skip-settings-v1'),saved,'Invalid combined duration cannot replace the saved settings');
+ series.vodId='another-series';window.MobileTVSkips.setState(state);assert.equal(element('skipIntro').value,0,'Different series has independent defaults');
+ state.metadata.isLive=true;window.MobileTVSkips.setState(state);assert.equal(element('skipSettings').hidden,true);const count=controls.length;element('tvVideo').paused=false;await emit('timeupdate');assert.equal(controls.length,count,'Live streams never trigger segment skipping');
+ console.log('PASS: one-shot intro skip, manual replay, independent series persistence, bounded settings, early outro advance/pause and live exclusion');
+})().catch(error=>{console.error(error);process.exitCode=1;});
