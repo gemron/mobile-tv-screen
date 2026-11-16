@@ -12,7 +12,11 @@ try{
   const ranges=[0,1].map(index=>{const packets=probe.packets.filter(p=>p.stream_index===index&&Number.isFinite(Number(p.pts_time)));return [Math.max(0,Math.min(...packets.map(p=>Number(p.pts_time)))),Math.max(...packets.map(p=>Number(p.pts_time)+Number(p.duration_time||0)))];});
   const actual=timeline.ranges(),expected=[Math.max(ranges[0][0],ranges[1][0]),Math.min(ranges[0][1],ranges[1][1])];
   assert.ok(actual.length,JSON.stringify({start,disabled:timeline.disabled,tracks:[...timeline.tracks]}));
-  assert.ok(Math.abs(actual[0][0]-expected[0])<.002,JSON.stringify({start,actual,expected}));assert.ok(Math.abs(actual.at(-1)[1]-expected[1])<.002,JSON.stringify({start,actual,expected}));
+  // FFprobe serializes packet times to decimal microseconds. Older FFmpeg
+  // versions can reach the intended 2 ms edit-list rounding boundary exactly;
+  // include that boundary and one microsecond of serialization precision.
+  const tolerance=.002+.000001;
+  assert.ok(Math.abs(actual[0][0]-expected[0])<=tolerance,JSON.stringify({start,actual,expected}));assert.ok(Math.abs(actual.at(-1)[1]-expected[1])<=tolerance,JSON.stringify({start,actual,expected}));
   let firstMdatEnd=0;for(let offset=0;offset+8<bytes.length;){const size=bytes.readUInt32BE(offset);if(bytes.toString('ascii',offset+4,offset+8)==='mdat'){firstMdatEnd=offset+size;break;}offset+=size;}
   const partial=new Mp4Timeline();partial.write(bytes.subarray(0,firstMdatEnd-1));assert.equal(partial.ranges().length,0,'An unfinished media fragment never contributes playable seconds');partial.write(bytes.subarray(firstMdatEnd-1,firstMdatEnd));assert.ok(partial.ranges().length);
  }
