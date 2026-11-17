@@ -1,5 +1,5 @@
 const assert = require('assert/strict');
-const { Readable } = require('stream');
+const { Readable, PassThrough } = require('stream');
 const { setTimeout: delay } = require('timers/promises');
 const { OriginalRangeCache } = require('../src/services/originalRangeCache');
 const express = require('express');
@@ -101,6 +101,45 @@ async function main() {
     const cancelled = small.cache.read(address, {}, 'one', 'bytes=0-', abort.signal); abort.abort();
     await assert.rejects(cancelled, { name: 'AbortError' });
   } finally { small.cache.close(); }
+
+  const sequential=fixture({maxBytes:6*block,ahead:4,concurrency:1});
+  try {
+    const settle=async()=>{const end=Date.now()+3000;while(sequential.cache.jobs.size&&Date.now()<end)await delay(5);assert.equal(sequential.cache.jobs.size,0);};
+    for(let index=0;index<14;index++){
+      const part=await sequential.cache.read(address,{},'sequential',`bytes=${index*block}-`);assert.deepEqual(part.body,data.subarray(index*block,(index+1)*block));await settle();
+      assert.ok(sequential.cache.stats().contiguousAheadBytes>=5*block,'A full sliding window keeps the current and next four blocks ready, rather than retaining played history');
+    }
+    for(const request of sequential.requests)assert.equal(sequential.requests.filter(other=>other.start===request.start).length,1,'Sequential playback never redownloads a block evicted by speculative LRU churn');
+  }finally{sequential.cache.close();}
+  for(const mode of ['truncate','timeout','temporary','etag','late-end']){
+    const calls=[];let attempts=0;
+    const resilient=new OriginalRangeCache({blockBytes:block,maxBytes:2*block,concurrency:1,ahead:0,blockTimeoutMs:60,retryDelayMs:0,open:async(_,headers)=>{
+      const [start,end]=headers.Range.match(/\d+/g).map(Number),attempt=attempts++;calls.push({start,end,ifRange:headers['If-Range']});
+      const upRes=(mode==='timeout'&&attempt===0)||mode==='late-end'?new PassThrough():Readable.from([data.subarray(start,mode==='truncate'&&attempt===0||mode==='etag'&&attempt===0?start+8192:end+1)]);
+      upRes.statusCode=mode==='temporary'&&attempt===0?503:206;upRes.headers={'content-range':`bytes ${start}-${end}/${total}`,etag:mode==='etag'&&attempt>0?'"changed"':'"stable"'};upRes.on('error',()=>{});
+      if(mode==='timeout'&&attempt===0){let sent=0;const timer=setInterval(()=>{if(!upRes.destroyed)upRes.write(data.subarray(sent,sent+1));sent++;},10);upRes.once('close',()=>clearInterval(timer));}
+      if(mode==='late-end')upRes.write(data.subarray(start,end+1));
+      return {upRes};
+    }});
+    try{
+      const response=await resilient.read(address,{},'retry','bytes=0-',undefined,true),collect=async()=>{const chunks=[];for await(const chunk of response.stream)chunks.push(chunk);return Buffer.concat(chunks);};
+      if(mode==='etag'){await assert.rejects(collect());assert.equal(resilient.stats().bytes,0,'A changed representation is never combined with prior partial bytes');assert.equal(calls.length,2);}
+      else if(mode==='late-end'){assert.deepEqual(await collect(),data.subarray(0,block));const end=Date.now()+500;while(resilient.jobs.size&&Date.now()<end)await delay(5);assert.equal(resilient.stats().bytes,block,'A complete range is cached without waiting for delayed origin EOF');assert.equal(resilient.stats().retries,0);assert.equal(calls.length,1);}
+      else {assert.deepEqual(await collect(),data.subarray(0,block),'A retry resumes at the exact missing byte, without duplicating or dropping streamed media');assert.equal(resilient.stats().retries,1);if(mode!=='temporary'){assert.ok(calls[1].start>0);assert.equal(calls[1].ifRange,'"stable"');}if(mode==='timeout')assert.equal(resilient.stats().timeouts,1);}
+    }finally{resilient.close();}
+  }
+  const brokenAhead=new OriginalRangeCache({blockBytes:block,maxBytes:6*block,concurrency:1,ahead:4,retryDelayMs:0,open:async(_,headers)=>{const [start,end]=headers.Range.match(/\d+/g).map(Number),upRes=Readable.from([data.subarray(start,start>=block&&start<2*block?start+17:end+1)]);upRes.statusCode=206;upRes.headers={'content-range':`bytes ${start}-${end}/${total}`};return {upRes};}});
+  try{
+    await brokenAhead.read(address,{},'backoff','bytes=0-');const end=Date.now()+2000;while(brokenAhead.jobs.size&&Date.now()<end)await delay(5);assert.equal(brokenAhead.jobs.size,0);
+    const before=brokenAhead.stats().retries;for(let i=0;i<100;i++)brokenAhead.plan(brokenAhead.window);await delay(20);assert.equal(brokenAhead.stats().retries,before,'Permanent speculative failures are backed off rather than re-created on every plan pass');
+    assert.ok(brokenAhead.stats().failedAhead>0);assert.equal(brokenAhead.stats().failures,1);
+  }finally{brokenAhead.close();}
+  const flowing=fixture({maxBytes:12*block,ahead:8,concurrency:4});
+  try{
+    const response=await flowing.cache.response(address,{},'flowing','bytes=137-'),received=[];
+    for await(const chunk of response.stream){received.push(chunk);assert.ok(flowing.cache.stats().bytes<=flowing.cache.maxBytes);await delay(3);}
+    assert.deepEqual(Buffer.concat(received),data.subarray(137));const seen=new Set();for(const request of flowing.requests){assert.ok(!seen.has(request.start),'A continuous HTTP response must not redownload its next unread block under streaming backpressure');seen.add(request.start);}
+  }finally{flowing.cache.close();}
   const progressive = fixture({ ahead: 0 });
   try {
     const response = await progressive.cache.read(address, {}, 'one', 'bytes=137-', undefined, true);

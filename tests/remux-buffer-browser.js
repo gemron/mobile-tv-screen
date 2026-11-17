@@ -25,9 +25,22 @@ const {createAppServer}=require('../src/server'),castState=require('../src/servi
   const result=await browser.evaluate('({advanced:tvVideo.currentTime-reserveSample.time,waiting:reserveWaits-reserveSample.waits,nativeAhead:reserveSample.ahead,localAhead:parseFloat(metricPerf.textContent.split("本机可播: ")[1]),width:tvVideo.videoWidth,error:tvVideo.error?.code||0})');
   assert.ok(result.advanced>=7);assert.equal(result.waiting,0);assert.equal(result.error,0);
   console.log(JSON.stringify({test:'prepared remux survives unavailable origin',...result,readyMiB:stats.bytes/1048576,maxMiB:stats.maxBytes/1048576}));
-  offline=false;castState.seek(30,'Test');await browser.wait('tvVideo.currentSrc.includes("start=30") && tvVideo.currentTime>1 && !tvVideo.paused',30000);
+  offline=false;
+  const beforeDrag=await browser.evaluate('tvVideo.currentSrc');
+  await browser.evaluate('for(let i=0;i<40;i++){seekSlider.value=String(20+i/4);seekSlider.dispatchEvent(new Event("input",{bubbles:true}));}');
+  assert.equal(await browser.evaluate('tvVideo.currentSrc'),beforeDrag,'Pointer movement previews do not replace the media request');
+  await browser.evaluate('seekSlider.value="30";seekSlider.dispatchEvent(new Event("change",{bubbles:true}));');
+  await browser.wait('tvVideo.currentSrc.includes("start=30") && tvVideo.currentTime>1 && !tvVideo.paused',30000);
   assert.equal((await status()).remuxBuffer.streams,1,'Seeking removes the old reserve');
   const current=await browser.evaluate('new URL(tvVideo.currentSrc).searchParams.get("requestId")');assert.equal((await status()).remuxBuffer.buffers[0].requestId,current,'Timeline metrics follow the current seek request');
+  for(const target of [50,4,40]){castState.seek(target,'Test');await new Promise(resolve=>setTimeout(resolve,150));}
+  await browser.wait('tvVideo.currentSrc.includes("start=40") && tvVideo.currentTime>1 && !tvVideo.paused',30000);
+  const finalRequest=await browser.evaluate('new URL(tvVideo.currentSrc).searchParams.get("requestId")');
+  for(let i=0;i<40&&(await status()).remuxBuffer.streams!==1;i++)await new Promise(resolve=>setTimeout(resolve,50));
+  const afterRapid=(await status()).remuxBuffer;
+  assert.equal(afterRapid.streams,1,'Rapid seeks release old FFmpeg reserves instead of accumulating full buffers');
+  assert.equal(afterRapid.buffers[0].requestId,finalRequest);assert.equal(afterRapid.buffers[0].start,40);
+  assert.ok(afterRapid.bytes<=64*1048576+65536);assert.notEqual(finalRequest,current);
   await browser.click('#playerOptions summary');await browser.screenshot(path.resolve('data/ui-previews/remux-ready-buffer.png'));
   const unknown=castState.setMedia({url:base+'/reserve-fixture',protocol:'Library',mediaType:'video',metadata:{title:'Unknown total length',mimeType:'video/x-matroska'},streamMode:'transcode',startPosition:10,startPositionUnit:'seconds',autoPlay:true});
   await browser.wait('tvVideo.videoWidth===960 && tvVideo.currentTime>1 && !tvVideo.paused && parseFloat(metricPerf.textContent.split("本机可播: ")[1])>10',30000);
@@ -36,5 +49,5 @@ const {createAppServer}=require('../src/server'),castState=require('../src/servi
   await browser.wait('Number(seekSlider.max)>64 && Number(seekSlider.max)<66');assert.equal(castState.getSnapshot().sessionId,unknown.sessionId);
   castState.stop('Test');await browser.wait('!document.body.classList.contains("casting-active")');
   for(let i=0;i<40&&(await status()).remuxBuffer.active;i++)await new Promise(r=>setTimeout(r,50));assert.equal((await status()).remuxBuffer.active,false);
-  console.log('PASS: real Edge remux prefetch, origin outage, telemetry, seek replacement and stop cleanup');
+  console.log('PASS: real '+(chrome?'Chrome':'Edge')+' remux prefetch, origin outage, drag previews, rapid seek replacement and stop cleanup');
 })().catch(error=>{console.error(error.stack||error);process.exitCode=1;}).finally(async()=>{await browser?.close();await receiver?.close();const target=fs.realpathSync(sandbox);assert.equal(path.dirname(target).toLowerCase(),fs.realpathSync(os.tmpdir()).toLowerCase());assert.ok(path.basename(target).startsWith('MobileTV remux reserve '));fs.rmSync(target,{recursive:true,force:true,maxRetries:8,retryDelay:200});});

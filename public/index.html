@@ -87,9 +87,9 @@
   </dialog>
 
   <dialog class="app-dialog library-matches" id="libraryMatches" aria-labelledby="libraryMatchesTitle">
-    <div class="dialog-heading"><div><h2 id="libraryMatchesTitle">查找片源</h2><p class="field-hint">选择片源查看选集，关闭后继续浏览推荐。</p></div><button type="button" class="icon-btn" id="libraryCloseMatches" aria-label="关闭片源结果">×</button></div>
+    <div class="dialog-heading"><div><h2 id="libraryMatchesTitle">查找片源</h2><p class="field-hint">选择片源查看选集，关闭后继续浏览推荐。</p></div><button type="button" class="icon-btn" id="libraryCloseMatches" aria-label="关闭片源结果"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div>
     <div class="library-matches-status"><p id="libraryMatchesStatus" role="status" aria-live="polite"></p><button class="text-button" type="button" id="libraryMatchesCancel" hidden>停止搜索</button><button class="text-button" type="button" id="libraryMatchesRetry" hidden>重新搜索</button></div>
-    <div class="vod-grid" id="libraryMatchesResults" aria-label="推荐影片的片源结果"></div>
+    <div class="library-matches-scroll" tabindex="0" role="region" aria-label="滚动浏览片源结果"><div class="vod-grid" id="libraryMatchesResults" aria-label="推荐影片的片源结果"></div></div>
   </dialog>
   <dialog class="app-dialog library-detail" id="libraryDetail" aria-labelledby="libraryDetailTitle">
     <div class="dialog-heading"><div><span class="eyebrow">READY TO WATCH</span><h2 id="libraryDetailTitle">影片详情</h2></div><div class="detail-heading-actions"><button type="button" class="btn" id="libraryDetailFavorite" aria-pressed="false" hidden>☆ 收藏</button><button class="icon-btn" id="libraryCloseDetail" aria-label="关闭影片详情"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div></div>

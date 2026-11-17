@@ -12,7 +12,8 @@ const definitions = {
 };
 const text = value => String(value || '').replace(/\s+/g, ' ').trim();
 function describe(raw, base) {
-  const plugin = /^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1];
+  let plugin = /^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1];
+  if (plugin === 'New6v') plugin = 'SixV';
   if (!definitions[plugin] || plugin === 'XPath' && raw.key !== 'cc') return null;
   const endpoint = typeof raw.ext === 'string' && /^https?:/.test(raw.ext) ? raw.ext : raw.ext?.siteUrl || definitions[plugin];
   const api = webUrl(endpoint, base);

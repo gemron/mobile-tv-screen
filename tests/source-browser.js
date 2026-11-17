@@ -23,6 +23,7 @@ async function run(){
   </script>`;
   const server=http.createServer((req,res)=>{
     res.setHeader('Content-Type','text/html; charset=utf-8');
+    if(req.url==='/geographic'){res.statusCode=403;res.end('<html><title>Blocked</title><body><pre>Access denied by geographic restriction</pre></body></html>');return;}
     if(req.url==='/protected'){if(req.headers['x-requested-with']!=='FixtureLogin'||req.headers.cookie!=='session=fixture'){res.statusCode=403;res.end('denied');return;}protectedRequests++;}
     if(/\.m3u8$/.test(req.url)){res.setHeader('Content-Type','application/vnd.apple.mpegurl');res.end('#EXTM3U\n#EXTINF:2,\nsegment.ts\n#EXT-X-ENDLIST');return;}
     if(req.url==='/missing-file'){res.end('<!doctype html><p>No selected file</p><script>fetch("/background.m3u8")</script>');return;}
@@ -38,6 +39,8 @@ async function run(){
     await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
     const result=await browser.run('http://127.0.0.1:'+server.address().port,{timeout:15000});
     assert.match(result.text,/Source browser regression/);assert.match(result.text,/ready/);
+    await assert.rejects(browser.run('http://127.0.0.1:'+server.address().port+'/geographic',{timeout:10000}),error=>error.code==='SOURCE_REGION_BLOCKED'&&error.status===403&&!error.verifyUrl);
+    if(process.argv.includes('--headless-only')){console.log('PASS: real headless source browser distinguishes a geographic denial from a login challenge');return;}
     assert.ok(fs.existsSync(path.join(browser.profile,'Default')),'Isolated profile was created successfully');
     const base='http://127.0.0.1:'+server.address().port;
     const protectedPage=await browser.run(base+'/protected',{headers:{'x-requested-with':'FixtureLogin',cookie:'session=fixture'}});assert.match(protectedPage.text,/ready/);assert.equal(protectedRequests,1,'Browser parser receives configured same-origin request headers');

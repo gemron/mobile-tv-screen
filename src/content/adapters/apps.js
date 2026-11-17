@@ -4,10 +4,12 @@ const { json, webUrl, cleanHeaders, decodeFtyValue } = require('../format');
 const hash = (type, input) => createHash(type).update(input).digest('hex');
 const definitions = { AppTT: { endpoint: 'http://v.rbotv.cn', kind: 'apptt' }, Jpys: { endpoint: 'https://www.ghw9zwp5.com', kind: 'jpys' } };
 function describe(raw, base) {
-  const plugin = /^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1], definition = definitions[plugin];
+  let plugin = /^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1];
+  if (plugin === 'AppRJ') plugin = 'AppTT';
+  const definition = definitions[plugin];
   if (!definition) return null;
   const ext = typeof raw.ext === 'object' && raw.ext || {};
-  const endpoint = typeof raw.ext === 'string' && plugin === 'AppTT' ? decodeFtyValue(raw.ext) : '';
+  const endpoint = ext.url || (typeof raw.ext === 'string' && plugin === 'AppTT' ? decodeFtyValue(raw.ext) : '');
   return { adapter: definition.kind, api: webUrl(ext.siteUrl || endpoint || definition.endpoint, base), supported: true, implementation: 'node-' + definition.kind, deviceId: randomUUID(), headers: cleanHeaders({ 'user-agent': plugin === 'AppTT' ? 'okhttp-okgo/jeasonlzy' : 'Mozilla/5.0 (X11; Linux aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36', ...raw.header, ...raw.headers }) };
 }
 async function call(site, path, params, signal) {

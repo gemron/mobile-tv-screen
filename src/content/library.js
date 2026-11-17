@@ -78,9 +78,12 @@ class Library {
     this.sites = (document.sites || []).filter(site => site && typeof site === 'object').slice(0, 300).map((site, index) => catalog.describeSite(site, url, index));
     const seen = new Set(); this.sites = this.sites.filter(site => { if (seen.has(site.key)) return false; seen.add(site.key); return true; });
     const material = new SourceMaterial(document.spider, url);
+    const materials = new Map([[String(document.spider || ''), material]]);
     for (const site of this.sites) {
       site.browser = this.browser;
-      site.material = material;
+      const declaration = site.materialDeclaration || document.spider;
+      if (!materials.has(declaration)) materials.set(declaration, new SourceMaterial(declaration, url));
+      site.material = materials.get(declaration);
       site.accounts = this.accounts; site.cloud = this.cloud;
       site.parseFlags = Array.isArray(document.flags) ? document.flags.map(String).slice(0,100) : [];
       site.torrents = this.torrents;

@@ -8,11 +8,60 @@
   const artworkUrl = value => window.MobileTVArtwork.url(value, location.href);
   const status = (message, error = false) => { $('libraryStatus').textContent = message; $('libraryStatus').classList.toggle('error', error); $('libraryVerify').hidden = !error || !state.verifyUrl; $('libraryVerifyRetry').hidden = !error; };
   state.shelf = 'browse'; state.collection = { history: [], favorites: [] };
+  state.playerVisible = document.body.classList.contains('casting-active');
+  function captureBrowseView(focus = document.activeElement) {
+    const saved = {};
+    for (const key of ['config', 'mode', 'shelf', 'site', 'category', 'keyword', 'filters', 'filterDefinitions', 'page', 'pages', 'liveSource', 'channels', 'channelLimit', 'drawerSource']) saved[key] = state[key];
+    return { saved, x: scrollX, y: scrollY, focus, collectionId: focus?.dataset?.collectionId,
+      channelId: focus?.closest?.('.live-channel-row')?.dataset.channel,
+      search: $('librarySearch').value, all: $('librarySearchAll').checked,
+      liveSearch: $('libraryLiveSearch').value, liveGroup: $('libraryLiveGroup').value,
+      status: $('libraryStatus').textContent, statusError: $('libraryStatus').classList.contains('error') };
+  }
+  async function restoreBrowseView(view, epoch) {
+    const current = () => !state.playerVisible && state.viewEpoch === epoch;
+    const sourceChanged = state.config?.sourceId !== view.saved.config?.sourceId;
+    if (sourceChanged && view.saved.config?.sourceId) {
+      $('libraryView').inert = true;
+      try {
+        const config = await api('/sources/select', { id: view.saved.config.sourceId });
+        if (!current()) return;
+        renderConfig(config); view.saved.config = config;
+      } catch (error) { if (current()) toast(error.message); return; }
+      finally { $('libraryView').inert = false; }
+    }
+    if (!current()) return;
+    Object.assign(state, view.saved);
+    $('librarySite').value = state.site; $('libraryLiveSource').value = state.liveSource;
+    $('librarySearch').value = view.search; $('librarySearchAll').checked = view.all;
+    $('libraryLiveSearch').value = view.liveSearch; $('libraryLiveGroup').value = view.liveGroup;
+    $('standbyView').hidden = state.mode !== 'cast'; $('libraryView').hidden = state.mode === 'cast';
+    window.MobileTVUI?.updateTitle?.({ section: ({ cast: '投屏', vod: '影视片库', live: '直播电视' })[state.mode] });
+    for (const button of document.querySelectorAll('[data-library-nav]')) { const active = button.dataset.libraryNav === state.mode; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
+    renderShelf(); syncSearchUi(); status(view.status, view.statusError);
+    if (state.shelf !== 'browse') refreshCollection().catch(error => toast(error.message));
+    requestAnimationFrame(() => {
+      if (!current()) return;
+      let focus = view.focus;
+      if (!focus?.isConnected && view.collectionId) focus = [...$('libraryCollectionList').querySelectorAll('.collection-open')].find(button => button.dataset.collectionId === view.collectionId);
+      if (!focus?.isConnected && view.channelId) focus = [...$('libraryChannelList').children].find(row => row.dataset.channel === view.channelId)?.querySelector('.live-channel');
+      if (focus?.isConnected) focus.focus({ preventScroll: true });
+      window.scrollTo(view.x, view.y);
+    });
+  }
+  window.MobileTVLibraryView = {
+    setPlaybackActive(active) {
+      if (active === state.playerVisible) return;
+      state.playerVisible = active; const epoch = state.viewEpoch = (state.viewEpoch || 0) + 1;
+      if (active) { state.returnView = state.launchView || ($('libraryDetail').open && state.detailView) || (state.config ? captureBrowseView() : null); state.launchView = null; }
+      else { const view = state.returnView; state.returnView = null; if (view) restoreBrowseView(view, epoch); }
+    },
+  };
   async function api(route, body, signal) {
     const response = await fetch('/api/library' + route, { ...(body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), signal });
     const result = await response.json();
     signal?.throwIfAborted();
-    if (!response.ok) { if(result.verifyUrl&&!route.startsWith('/accounts')) state.verifyUrl=result.verifyUrl; throw Object.assign(new Error(result.error || '操作失败，请重试'),{verifyUrl:result.verifyUrl,requiresSave:result.requiresSave,saveFile:result.saveFile,capacityLimited:result.capacityLimited}); }
+    if (!response.ok) { if(result.code==='SOURCE_REGION_BLOCKED') state.verifyUrl='';else if(result.verifyUrl&&!route.startsWith('/accounts')) state.verifyUrl=result.verifyUrl; throw Object.assign(new Error(result.error || '操作失败，请重试'),{code:result.code,verifyUrl:result.verifyUrl,requiresSave:result.requiresSave,saveFile:result.saveFile,capacityLimited:result.capacityLimited}); }
     return result;
   }
   function begin() { cancelEpisodeRequest(); state.fetching?.abort(); $('libraryCancelSearch').hidden = true; state.fetching = new AbortController(); return { id: ++state.request, signal: state.fetching.signal }; }
@@ -94,7 +143,7 @@
       actions.append(use, save, remove); row.append(name, meta, actions); $('librarySavedSources').append(row);
     }
   }
-  async function refreshCollection() { state.collection = await api('/collection'); renderCollectionCounts(); if (state.shelf !== 'browse') renderCollection(); }
+  async function refreshCollection() { state.collection = await api('/collection'); renderCollectionCounts(); if (state.shelf !== 'browse' && !state.playerVisible) renderCollection(); }
   function renderCollectionCounts() {
     $('libraryHistoryCount').textContent = state.collection.history.length; $('libraryFavoriteCount').textContent = state.collection.favorites.length;
     updateFavoriteButtons();
@@ -107,14 +156,15 @@
   }
   const timeLabel = seconds => { seconds = Math.floor(Number(seconds) || 0); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`; };
   function renderCollection() {
+    const focusedId = document.activeElement?.dataset?.collectionId;
     const history = state.shelf === 'history', list = state.collection[history ? 'history' : 'favorites'];
     $('libraryCollectionNote').textContent = history ? '保留最近 200 条记录 · 点击继续观看' : '影片与频道收藏 · 仅保存在本机'; $('libraryClearHistory').hidden = !history || !list.length;
     $('libraryCollectionList').replaceChildren();
     if (!list.length) { $('libraryCollectionList').append(node('div', 'library-empty', history ? '还没有播放记录，开始观看后会自动保留进度。' : '还没有收藏，可在影片详情或频道旁点击 ☆。')); return; }
     for (const item of list) {
       const card = node('article', 'collection-card'), open = node('button', 'collection-open'), body = node('div', 'collection-info'), picture = artworkUrl(item.picture), poster = node('div', 'collection-poster', item.kind === 'live' ? 'TV' : '▶');
-      open.type = 'button';
-      if (picture) { const image = node('img'); image.alt = ''; image.loading = 'lazy'; image.src = picture; image.addEventListener('error', () => image.remove()); poster.replaceChildren(image); }
+      open.type = 'button'; open.dataset.collectionId = item.id;
+      if (picture) { const image = node('img'); image.alt = ''; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer'; image.src = picture; image.addEventListener('error', () => image.remove()); poster.replaceChildren(image); }
       const source = state.config?.sources?.find(source => source.id === item.sourceId);
       body.append(node('strong', '', item.title), node('span', '', [item.kind === 'live' ? '直播' : item.episode, source?.name || '订阅已移除'].filter(Boolean).join(' · ')));
       if (history && item.kind === 'vod') { body.append(node('small', '', item.duration > 0 && item.position >= item.duration - Math.min(20, item.duration * .05) ? '已看完 · 重新播放' : '看到 ' + timeLabel(item.position))); if (item.duration > 0) { const track = node('div', 'collection-progress'), fill = node('i'); fill.style.width = Math.min(100, 100 * item.position / item.duration) + '%'; track.append(fill); body.append(track); } }
@@ -123,19 +173,22 @@
       remove.addEventListener('click', async () => { try { state.collection = await api('/collection/remove', { kind: state.shelf, id: item.id }); renderCollectionCounts(); renderCollection(); } catch (error) { toast(error.message); } });
       card.append(open, remove); $('libraryCollectionList').append(card);
     }
+    if (focusedId) [...$('libraryCollectionList').querySelectorAll('.collection-open')].find(button => button.dataset.collectionId === focusedId)?.focus({ preventScroll: true });
   }
   async function openFavorite(item, button) {
+    const view = captureBrowseView(button);
     button.disabled = true;
     try {
       if (item.sourceId !== state.config?.sourceId) { renderConfig(await api('/sources/select', { id: item.sourceId })); state.channels = []; state.drawerSource = ''; }
-      state.site = item.siteKey; $('librarySite').value = item.siteKey; await showDetail(item.vodId, false, item.title);
+      await showDetail(item.vodId, false, item.title, item.siteKey, view);
     } catch (error) { report(error); toast(error.message); }
     finally { button.disabled = false; }
   }
   async function resumeItem(id, favorite = false, button) {
+    const view = captureBrowseView(button); if (state.playerVisible) state.returnView = view; else state.launchView = view;
     if (button) button.disabled = true; status('正在恢复播放…');
-    try { const result = await api('/resume', { id, favorite }); state.playback = result.playback; const config = await api('/config'); if (config.sourceId !== state.config?.sourceId) { state.channels = []; state.drawerSource = ''; $('libraryDrawerGroup').replaceChildren(option('', '全部分组')); } renderConfig(config); updateControls(); await refreshCollection(); }
-    catch (error) { report(error); toast(error.message); }
+    try { const result = await api('/resume', { id, favorite }); state.playback = result.playback; const config = await api('/config'); if (config.sourceId !== state.config?.sourceId) { state.channels = []; state.drawerSource = ''; $('libraryDrawerGroup').replaceChildren(option('', '全部分组')); renderConfig(config); } updateControls(); await refreshCollection(); }
+    catch (error) { state.launchView = null; report(error); toast(error.message); }
     finally { if (button) button.disabled = false; }
   }
   function isFavorite(selection) { return state.collection.favorites.some(item => item.sourceId === (selection.sourceId || state.config?.sourceId) && item.kind === selection.kind && (item.kind === 'live' ? item.sourceKey === selection.sourceKey && item.channelId === selection.channelId : item.siteKey === selection.siteKey && String(item.vodId) === String(selection.vodId))); }
@@ -192,11 +245,11 @@
       card.dataset.key = key;
       const artwork = node('div', 'vod-artwork');
       const picture = artworkUrl(video.picture), fallback = node('span', 'vod-poster-placeholder', '暂无海报'); fallback.hidden = Boolean(picture); artwork.append(fallback);
-      if (picture) { const img = node('img'); img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.addEventListener('error', () => { img.hidden = true; fallback.textContent = '海报暂不可用'; fallback.hidden = false; }); img.src = picture; artwork.append(img); }
+      if (picture) { const img = node('img'); img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.referrerPolicy = 'no-referrer'; img.addEventListener('error', () => { img.hidden = true; fallback.textContent = '海报暂不可用'; fallback.hidden = false; }); img.src = picture; artwork.append(img); }
       if (video.remarks) artwork.append(node('span', 'vod-remark', video.remarks));
       card.append(artwork, node('strong', 'vod-title', video.title), node('span', 'vod-meta', [video.sourceName, video.year, video.area, video.category].filter(Boolean).join(' · ')));
       const label=node('span','vod-match',video.match?.label||'');label.hidden=!label.textContent;card.append(label);
-      card.addEventListener('click', () => { if(video.searchTitle){openMatches(video,card);return;} if(matches){stopMatches();showDetail(video.id,false,video.title,video.siteKey||state.site);return;} if(video.siteKey){state.site=video.siteKey;$('librarySite').value=video.siteKey;} if(video.folder){state.category=video.id;loadList(1);}else showDetail(video.id,false,video.title); }); container.insertBefore(card,before);before=card.nextElementSibling;
+      card.addEventListener('click', () => { if(video.searchTitle){openMatches(video,card);return;} if(matches){stopMatches();showDetail(video.id,false,video.title,video.siteKey||state.site,state.matchView);return;} if(video.folder){if(video.siteKey){state.site=video.siteKey;$('librarySite').value=video.siteKey;}state.category=video.id;loadList(1);}else showDetail(video.id,false,video.title,video.siteKey||state.site,captureBrowseView(card)); }); container.insertBefore(card,before);before=card.nextElementSibling;
     }
     if(append){for(const [key,card]of existing)if(!retained.has(key)&&!card.contains(focused))card.remove();if(focused?.isConnected&&document.activeElement!==focused)focused.focus({preventScroll:true});}
     if(matches){$('libraryMatchesStatus').textContent=data.notice||`${data.list.length} 个片源结果${data.done?'':' · 继续搜索中…'}`;return;}
@@ -226,7 +279,7 @@
     status(`${items.length} 场赛事 · 按日期与状态排序`);
   }
   function teamImage(url,name) {
-    const image=node('img');image.src=artworkUrl(url);image.alt=name+'队标';image.loading='lazy';image.decoding='async';image.addEventListener('error',()=>{image.hidden=true;});return image;
+    const image=node('img');image.referrerPolicy='no-referrer';image.src=artworkUrl(url);image.alt=name+'队标';image.loading='lazy';image.decoding='async';image.addEventListener('error',()=>{image.hidden=true;});return image;
   }
   function teamCard(team) {
     const card=node('div','schedule-team');if(team.logo)card.append(teamImage(team.logo,team.name));else card.append(node('span','team-initial',Array.from(team.name||'球队').slice(0,2).join('')));card.append(node('strong','',team.name));return card;
@@ -251,6 +304,7 @@
     if(!count)$('libraryMatchesResults').replaceChildren(node('div','library-empty','搜索已停止，可重新搜索，或关闭后查看其他推荐。'));
   }
   async function openMatches(video,trigger=state.matchTrigger) {
+    if (!$('libraryMatches').open) state.matchView = captureBrowseView(trigger);
     state.matchSearch?.controller.abort();state.matchVideo=video;state.matchTrigger=trigger;
     const request=state.matchSearch={controller:new AbortController()},dialog=$('libraryMatches'),current=()=>state.matchSearch===request&&dialog.open&&!request.controller.signal.aborted;
     $('libraryMatchesTitle').textContent=video.searchTitle+' · 片源';$('libraryMatchesResults').replaceChildren(node('div','library-empty','正在查找可播放片源…'));
@@ -277,7 +331,7 @@
     syncSearchUi();
     $('libraryCategories').replaceChildren(); state.filterDefinitions = {}; state.filters = {}; renderFilters();
     try { const data = await api('/home?site=' + encodeURIComponent(state.site), undefined, request.signal); if (request.id !== state.request) return; state.filterDefinitions = data.filters || {}; state.filters = {}; renderCategories(data.classes); renderFilters(); renderVideos(data); }
-    catch (error) { if (request.id === state.request && error.name !== 'AbortError') { placeholder('站点暂时没有响应，可切换其他站点或重试。'); report(error); } }
+    catch (error) { if (request.id === state.request && error.name !== 'AbortError') { placeholder(error.code==='SOURCE_REGION_BLOCKED'?'当前地区无法访问此站点，请切换其他片源。':'站点暂时没有响应，可切换其他站点或重试。'); report(error); } }
   }
   async function loadList(page) {
     syncSearchUi();
@@ -290,7 +344,9 @@
     $('libraryDetail').classList.toggle('is-loading',loading);$('libraryDetail').setAttribute('aria-busy',String(loading));$('libraryDetailLoading').hidden=!loading;
     $('libraryLines').disabled=loading||!state.detail;$('libraryParser').disabled=loading;
   }
-  async function showDetail(id, refresh = false, title = '', site = refresh ? state.detailSite || state.site : state.site) {
+  async function showDetail(id, refresh = false, title = '', site = refresh ? state.detailSite || state.site : state.site, view = null) {
+    if (view) { state.detailView = view; if (state.playerVisible) state.returnView = view; }
+    else if (!$('libraryDetail').open && !state.playerVisible) state.detailView = captureBrowseView();
     const previousProvider = refresh ? state.detail?.lines[state.line]?.provider : '';
     title=title||(state.detail?.id===id?state.detail.title:'影片详情');
     const request = begin();state.detailRequest=request.id;state.detailSite=site;state.detail=null;status('正在读取影片详情…'); $('libraryDetailStatus').replaceChildren();
@@ -302,7 +358,7 @@
       state.detail = video; state.line = 0; $('libraryDetailTitle').textContent = video.title; $('libraryDetailInfo').textContent = [video.year, video.area, video.category].filter(Boolean).join(' · ');
       if(previousProvider)state.line=Math.max(0,video.lines.findIndex(line=>line.provider===previousProvider));
       $('libraryDetailDescription').textContent = video.description || '暂无简介'; $('libraryDetailCast').textContent = [video.director && '导演：' + video.director, video.actor && '主演：' + video.actor].filter(Boolean).join('　');
-      const picture = artworkUrl(video.picture); $('libraryDetailPicture').hidden = !picture; if (picture) $('libraryDetailPicture').src = picture;
+      const picture = artworkUrl(video.picture); $('libraryDetailPicture').hidden = !picture; $('libraryDetailPicture').referrerPolicy = 'no-referrer'; if (picture) $('libraryDetailPicture').src = picture;
       const isMatch=Boolean(video.schedule);$('libraryDetail').classList.toggle('is-match',isMatch);
       if(video.schedule?.teams?.length===2){const container=$('libraryMatchTeams');container.hidden=false;video.schedule.teams.forEach((team,i)=>{if(i)container.append(node('span','match-versus','VS'));container.append(teamCard(team));});$('libraryDetailPicture').hidden=true;}
       const providers = { quark: '夸克', uc: 'UC', ali: '阿里', baidu: '百度' };
@@ -412,7 +468,7 @@
       button.classList.toggle('active', currentPlayback()?.channelId === channel.id);
       const selection = { kind: 'live', sourceKey: state.liveSource, channelId: channel.id }, saved = isFavorite(selection), favorite = node('button', 'live-favorite', saved ? '★' : '☆'); favorite.type = 'button'; favorite.setAttribute('aria-label', '收藏频道：' + channel.name); favorite.setAttribute('aria-pressed', String(saved));
       favorite.addEventListener('click', () => toggleFavorite(selection, favorite));
-      button.addEventListener('click', () => playChannel(channel.id, 0, button)); row.append(button, favorite); $('libraryChannelList').append(row);
+      button.addEventListener('click', () => { const view = captureBrowseView(button); if (state.playerVisible) state.returnView = view; else state.launchView = view; playChannel(channel.id, 0, button); }); row.append(button, favorite); $('libraryChannelList').append(row);
     }
     $('libraryMoreChannels').hidden = channels.length <= state.channelLimit;
     $('libraryMoreChannels').textContent = `再显示更多频道（${Math.min(state.channelLimit, channels.length)} / ${channels.length}）`;
@@ -422,7 +478,7 @@
     clearTimeout(state.digitTimer); state.channelDigits = '';
     if (button) button.disabled = true; status('正在连接频道…');
     try { const result = await api('/live/play', { sourceKey: state.liveSource, channelId, line }); state.playback = result.playback; updateControls(); showChannelOsd(); renderDrawer(); refreshCollection().catch(() => {}); }
-    catch (error) { report(error); toast(error.message); }
+    catch (error) { state.launchView = null; report(error); toast(error.message); }
     finally { if (button) button.disabled = false; }
   }
 

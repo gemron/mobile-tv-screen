@@ -2,12 +2,24 @@ const { resource } = require('../http');
 const { json, rc4, webUrl } = require('../format');
 const { resolvePage } = require('./websites');
 function describe(raw) {
-  const plugin = /^csp_(JPJ|JumiTv)(?:Guard)?$/.exec(raw.api)?.[1]; if (!plugin) return null;
+  const name = /^csp_(JPJ|JianPian|JumiTv)(?:Guard)?$/.exec(raw.api)?.[1]; if (!name) return null;
+  const plugin = name === 'JianPian' ? 'JPJ' : name;
   return { plugin, adapter: 'legacy-' + plugin, api: raw.ext?.siteUrl || (plugin === 'JPJ' ? 'http://fan123.cqxkn.com/' : 'http://43.248.117.149:1122/api.php/localhost/'), supported: true, implementation: 'node-' + plugin.toLowerCase(), headers: { 'user-agent': plugin === 'JPJ' ? 'Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 Version/4.0 Chrome/131.0.0.0 Mobile Safari/537.36 appVersion:416;packageName:com.jp3.xg3' : 'okhttp/3.12.0' } };
 }
 function decodeText(text) { const value = text.trim(); return /^[a-f0-9]+$/i.test(value) && value.length % 2 === 0 ? rc4(Buffer.from(value, 'hex'), '520720ygq').toString() : value; }
 function decode(text) { return json(decodeText(text)); }
 async function request(site, path, signal) {
+  if (site.plugin === 'JPJ' && !site.endpointOverride && !site.jianpianEndpoint && site.material) {
+    const facts = await site.material.get('JianPian', signal).catch(error => { signal?.throwIfAborted(); return null; });
+    const address = facts?.strings.find(v=>v.startsWith('https://dns.alidns.com/resolve?'));
+    if (address) {
+      const data=json((await resource(address,{signal,timeout:5000})).text);
+      const hosts=(data.Answer||[]).filter(row=>row.type===16).flatMap(row=>String(row.data).replace(/^"|"$/g,'').split(','));
+      const host=hosts.find(v=>/^(?:https?:\/\/)?[a-z0-9.-]+(?::\d+)?\/?$/i.test(v));
+      if(host)site.api=webUrl(/^https?:/.test(host)?host:'http://'+host);
+    }
+    site.jianpianEndpoint=true;
+  }
   let addresses = [site.api];
   if (site.plugin === 'JumiTv' && !site.endpointOverride && site.material) {
     const facts = await site.material.get('JumiTv', signal);

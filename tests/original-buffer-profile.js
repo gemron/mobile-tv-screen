@@ -35,6 +35,9 @@ async function profiles() {
       assert.equal(cache.stats().parallelLimit, label === '4K' ? 384 : label === '2K' ? 192 : 96);
     }
     assert.equal(cache.setPlaybackInfo({ width: 40000, height: 2160 }, original), false);
+    cache.setPlaybackInfo({width:1920,height:1080,duration:.05},original);
+    assert.equal(cache.stats().profile,'1080p');assert.equal(cache.stats().highBitrate,true);assert.equal(cache.stats().maxBytes,512*MIB,'High-bitrate 1080p originals can grow beyond the normal resolution budget');assert.equal(cache.stats().parallelLimit,384);
+    cache.setPlaybackInfo({width:3840,height:2160,duration:6000},original);
     assert.equal(cache.setPlaybackInfo({ width: 1280, height: 720 }, '/old-session'), false);
     assert.equal(cache.stats().maxBytes, 512 * MIB);
     await wait(() => cache.jobs.size === 0);
@@ -70,6 +73,9 @@ async function integration() {
     assert.equal((await status()).originalCache.maxBytes, 512 * MIB);
     await delay(550); send(tv, 3840, 1608);
     await wait(() => packets.some(packet => packet.type === 'progress' && packet.data.originalBuffer?.profile === '4K'));
+    const progress = packets.find(packet => packet.type === 'progress' && packet.data.originalBuffer?.profile === '4K').data.originalBuffer;
+    assert.equal(progress.highBitrate, false, 'the live readout includes the actual bitrate promotion flag');
+    assert.equal(progress.historyBytes, 0, 'the live readout separates played history from the forward window');
     send(tv, 1280, 720);
     await wait(async () => (await status()).originalCache.profile === '720p');
     send(tv, 3840, 2160, media.sessionId - 1);

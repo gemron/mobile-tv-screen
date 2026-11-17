@@ -487,6 +487,7 @@
     const isActive = snap.status && snap.status !== 'IDLE' && snap.status !== 'STOPPED';
     window.MobileTVSubtitles?.setState(snap);
     window.MobileTVTracks?.setState(snap);
+    window.MobileTVLibraryView?.setPlaybackActive(Boolean(isActive));
     document.body.classList.toggle('casting-active', Boolean(isActive));
     window.MobileTVUI?.updateTitle?.({ media: isActive ? snap.metadata?.title || '正在播放' : '' });
     els.playerStage.classList.toggle('is-live', Boolean(isActive && snap.metadata?.isLive));
@@ -763,10 +764,10 @@
         const buffer = msg.data.originalBuffer;
         els.metricBuffer.hidden = !buffer?.active;
         if (buffer?.active) {
-          const text = `原文件缓存 · ${buffer.profile} · ${(buffer.bytes / 1048576).toFixed(0)} / ${(buffer.maxBytes / 1048576).toFixed(0)} MB`;
+          const text = `原文件缓存 · ${buffer.profile}${buffer.highBitrate?' 高码率':''} · ${(buffer.bytes / 1048576).toFixed(0)} / ${(buffer.maxBytes / 1048576).toFixed(0)} MB`;
           if (els.metricBuffer.textContent !== text) els.metricBuffer.textContent = text;
           const continuous = Number(buffer.contiguousAheadBytes) || 0;
-          els.metricBuffer.title = `当前读取位置起连续缓存 ${(continuous / 1048576).toFixed(1)} MB` + (buffer.estimatedAheadSeconds > 0 ? `，按平均码率约 ${Math.floor(buffer.estimatedAheadSeconds)} 秒` : '') + (buffer.targetSeconds ? `；目标约 ${buffer.targetSeconds} 秒，受容量上限约束` : '；正在识别视频分辨率');
+          els.metricBuffer.title = `前方连续缓存 ${(continuous / 1048576).toFixed(1)} MB，已播放历史缓存 ${((buffer.historyBytes||0)/1048576).toFixed(1)} MB` + (buffer.estimatedAheadSeconds > 0 ? `，前方按平均码率约 ${Math.floor(buffer.estimatedAheadSeconds)} 秒` : '') + (buffer.targetSeconds ? `；目标约 ${buffer.targetSeconds} 秒，受容量上限约束` : '；正在识别视频分辨率');
         }
         const remux = msg.data.remuxBuffer;
         const stream=remux?.buffers?.find(item=>item.requestId===remuxRequestId);
@@ -774,9 +775,9 @@
         else preparedRanges=[];
         updateSeekBuffer();
         if (els.metricRemux) {
-          els.metricRemux.hidden = !remux?.active;
-          if (remux?.active) {
-            els.metricRemux.textContent = `封装后缓存 · ${(remux.bytes / 1048576).toFixed(1)} / ${(remux.maxBytes / 1048576).toFixed(0)} MB`;
+          els.metricRemux.hidden = !stream || activeStreamMode!=='transcode';
+          if (stream && activeStreamMode==='transcode') {
+            els.metricRemux.textContent = `封装后缓存 · ${((Number(stream.bytes)||0) / 1048576).toFixed(1)} / ${((Number(stream.maxBytes)||0) / 1048576).toFixed(0)} MB`;
             els.metricRemux.title = '已经完成兼容封装、等待播放器读取的数据；与原文件缓存及浏览器可播放秒数分别统计。';
           }
         }

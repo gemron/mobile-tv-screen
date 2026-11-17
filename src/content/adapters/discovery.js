@@ -4,8 +4,10 @@ const { extract } = require('../literals');
 const cheerio = require('cheerio');
 const douban = require('./douban');
 function describe(raw) {
-  const plugin = /^csp_(DouDou|Sssp)(?:Guard)?$/.exec(raw.api)?.[1]; if (!plugin) return null;
+  const name = /^csp_(DouDou|Douban|Sssp)(?:Guard)?$/.exec(raw.api)?.[1]; if (!name) return null;
+  const plugin = name === 'Douban' ? 'DouDou' : name;
   const extension = raw.ext && typeof raw.ext === 'object' ? raw.ext : {};
+  if (name === 'Douban') return { adapter: 'discovery-DouDou', plugin: 'DouDou', discovery: true, materialPlugin: 'Douban', api: 'https://movie.douban.com/', supported: true, implementation: 'node-douban', headers: { 'user-agent': 'Mozilla/5.0', referer: 'https://movie.douban.com/' } };
   return { adapter: 'discovery-' + plugin, plugin, discovery: plugin === 'DouDou', metadataApi: extension.metadataApi, metadataKey: extension.metadataKey, api: plugin === 'DouDou' ? 'https://movie.douban.com/' : 'https://play.ruanyazyk.com/', supported: true, implementation: 'node-' + plugin.toLowerCase(), headers: { 'user-agent': 'Mozilla/5.0', referer: plugin === 'DouDou' ? 'https://movie.douban.com/' : 'https://play.ruanyazyk.com/' } };
 }
 async function shortSources(site, signal) {

@@ -13,9 +13,10 @@ function boxes(buffer, visit) {
 const safeTime = value => Number.isFinite(value) && value >= -604800 && value <= 1209600;
 function merge(ranges, next) {
   if(!safeTime(next[0])||!safeTime(next[1])||next[1]<=next[0])return;
-  const last=ranges.at(-1);
-  if(last&&next[0]<=last[1]+.025){last[0]=Math.min(last[0],next[0]);last[1]=Math.max(last[1],next[1]);}
-  else if(ranges.length<256)ranges.push([...next]);
+  let from=0;while(from<ranges.length&&ranges[from][1]+.025<next[0])from++;
+  const merged=[...next];let to=from;
+  while(to<ranges.length&&ranges[to][0]<=merged[1]+.025){merged[0]=Math.min(merged[0],ranges[to][0]);merged[1]=Math.max(merged[1],ranges[to][1]);to++;}
+  ranges.splice(from,to-from,merged);if(ranges.length>256)ranges.shift();
 }
 function intersect(a,b) {
   const result=[];let i=0,j=0;

@@ -14,6 +14,23 @@ async function run() {
   assert.equal(artworkUrl('https://doubanio.com.evil.test/poster.jpg'), 'https://doubanio.com.evil.test/poster.jpg');
   assert.equal(artworkUrl('/poster.jpg', 'http://127.0.0.1:8080/'), 'http://127.0.0.1:8080/poster.jpg');
   assert.equal(artworkUrl('javascript:alert(1)'), ''); assert.equal(artworkUrl(''), '');
+  const raw = 'https://img.liangzipic.com/upload/poster.jpg?signature=a%2Bb&size=large';
+  assert.equal(artworkUrl('https://gimg0.baidu.com/gimg/app=2001&fmt=jpeg&src=img.liangzipic.com/upload/poster.jpg'), 'https://img.liangzipic.com/upload/poster.jpg');
+  assert.equal(artworkUrl('https://gimg.baidu.com/gimg?src=' + encodeURIComponent(raw)), raw, 'Unwrapping preserves the original signed query without a second decode');
+  assert.equal(artworkUrl('https://gimg2.baidu.com/gimg?src=' + encodeURIComponent(original)), artworkUrl(original), 'An unwrapped Douban image retains its protected relay');
+  for (const source of ['javascript:alert(1)', 'data:image/png;base64,AAAA', 'https://private:secret@fixture.test/poster.jpg', '%ZZ']) {
+    const wrapper = 'https://gimg0.baidu.com/gimg?src=' + (source === '%ZZ' ? source : encodeURIComponent(source));
+    assert.equal(artworkUrl(wrapper), wrapper, 'Invalid or credential-bearing relay targets are not unwrapped');
+  }
+  const lookalike = 'https://gimg0.baidu.com.evil.test/gimg?src=' + encodeURIComponent(raw);
+  assert.equal(artworkUrl(lookalike), lookalike);
+  const relay = 'http://wogg.fixture/db.php?url=' + original;
+  assert.equal(artworkUrl(relay), artworkUrl(original), 'A source-owned Douban relay uses the existing protected image route');
+  assert.equal(artworkUrl('https://mirror.fixture/db.php?url=' + encodeURIComponent(original)), artworkUrl(original));
+  const unrelated = 'http://wogg.fixture/db.php?url=' + encodeURIComponent(raw);
+  assert.equal(artworkUrl(unrelated), unrelated, 'Other PHP resources are not rewritten as Douban posters');
+  const nested = 'https://gimg0.baidu.com/gimg/app=2001&src=gimg2.baidu.com/image_search/src=' + encodeURIComponent(raw) + '&refer=fixture';
+  assert.equal(artworkUrl(nested), raw, 'Nested Baidu relays preserve encoded inner queries and resolve the original poster');
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhXcAAAAASUVORK5CYII=', 'base64');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'MobileTV artwork test '));
   const origin = http.createServer((req, res) => {

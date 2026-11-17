@@ -7,6 +7,7 @@ const { randomUUID } = require('crypto');
 const WebSocket = require('ws');
 const { setTimeout: delay } = require('timers/promises');
 const { webUrl, cleanHeaders } = require('./format');
+const { assertRegionAccess } = require('./source-access');
 
 class SourceBrowser {
   constructor(dataDir) { this.profile = path.resolve(dataDir, 'source-browser'); this.pending = new Map(); this.sequence = 0; this.queue = Promise.resolve(); this.closed = false; }
@@ -143,6 +144,7 @@ class SourceBrowser {
         if(this.closed||signal?.aborted)throw signal?.reason||new Error('站点浏览器已关闭');
         const state=await evaluate('({ready:document.readyState,title:document.title,html:document.documentElement?.outerHTML,url:location.href,video:document.querySelector("video")?.currentSrc,saveRequired:/该文件暂不支持预览[，,]?请保存至网盘后查看/.test(document.body?.innerText||"")})');
         if(state?.ready==='complete')documentReady ||= Date.now();
+        if (state?.ready === 'complete') assertRegionAccess(state.html);
         if(media&&documentReady&&!selected&&Date.now()>=nextSelection){const selectionTime=Date.now();selected=await selectByName(selectText);if(selected)selectedAt=selectionTime;else if(folderIndex<directoryNames.length&&await selectByName(directoryNames[folderIndex])){folderIndex++;nextSelection=Date.now()+500;}}
         if(!media&&documentReady&&Date.now()-documentReady>1500){
           if(/人机验证|Just a moment|Checking your browser|Access denied|Attention Required/i.test((state.title||'')+' '+(state.html||'').slice(0,1800)))throw Object.assign(new Error('请先打开站点浏览器完成人机验证或登录，再重试'),{status:428,verifyUrl:url});

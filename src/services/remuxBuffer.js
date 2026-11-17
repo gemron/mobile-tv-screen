@@ -8,11 +8,12 @@ class RemuxBuffer extends PassThrough {
     super({ readableHighWaterMark: maxBytes, writableHighWaterMark: 64 * 1024 });
     this.maxBytes = maxBytes;
     this.timeline = new Mp4Timeline();
+    this.producedBytes=0;this.lastOutputAt=0;
   }
-  _transform(chunk, encoding, callback) { this.timeline.write(chunk); super._transform(chunk, encoding, callback); }
+  _transform(chunk, encoding, callback) { this.timeline.write(chunk);this.producedBytes+=chunk.length;this.lastOutputAt=Date.now();super._transform(chunk, encoding, callback); }
 
   stats() {
-    return { bytes: this.destroyed ? 0 : this.readableLength, maxBytes: this.maxBytes, ranges: this.destroyed ? [] : this.timeline.ranges() };
+    return { bytes: this.destroyed ? 0 : this.readableLength, maxBytes: this.maxBytes, producedBytes:this.producedBytes, idleMs:this.lastOutputAt?Date.now()-this.lastOutputAt:0, timelineUnavailable:this.timeline.disabled, ranges: this.destroyed ? [] : this.timeline.ranges() };
   }
 }
 

@@ -19,6 +19,17 @@ try{
   assert.ok(Math.abs(actual[0][0]-expected[0])<=tolerance,JSON.stringify({start,actual,expected}));assert.ok(Math.abs(actual.at(-1)[1]-expected[1])<=tolerance,JSON.stringify({start,actual,expected}));
   let firstMdatEnd=0;for(let offset=0;offset+8<bytes.length;){const size=bytes.readUInt32BE(offset);if(bytes.toString('ascii',offset+4,offset+8)==='mdat'){firstMdatEnd=offset+size;break;}offset+=size;}
   const partial=new Mp4Timeline();partial.write(bytes.subarray(0,firstMdatEnd-1));assert.equal(partial.ranges().length,0,'An unfinished media fragment never contributes playable seconds');partial.write(bytes.subarray(firstMdatEnd-1,firstMdatEnd));assert.ok(partial.ranges().length);
+  if(start===0){
+    let moof=0;for(let p=0;p+8<=bytes.length;p+=bytes.readUInt32BE(p))if(bytes.toString('ascii',p+4,p+8)==='moof'){moof=p;break;}
+    const rolling=new Mp4Timeline();rolling.write(bytes.subarray(0,moof));
+    for(let segment=0;segment<300;segment++){
+      const fragment=Buffer.from(bytes.subarray(moof,firstMdatEnd));
+      const shift=(from,to)=>{let id=0;for(let p=from;p+8<=to;){const size=fragment.readUInt32BE(p),kind=fragment.toString('ascii',p+4,p+8);assert.ok(size>=8);if(kind==='moof'||kind==='traf')shift(p+8,p+size);if(kind==='tfhd')id=fragment.readUInt32BE(p+12);if(kind==='tfdt'){const offset=segment*3*timeline.tracks.get(id).scale;if(fragment[p+8]===1)fragment.writeBigUInt64BE(fragment.readBigUInt64BE(p+12)+BigInt(offset),p+12);else fragment.writeUInt32BE(fragment.readUInt32BE(p+12)+offset,p+12);}p+=size;}};
+      shift(0,fragment.length);rolling.write(fragment);
+    }
+    assert.ok(rolling.ranges().at(-1)[1]>890,'More than 256 timestamp discontinuities must retain new playable ranges rather than freezing the buffer at old timestamps');assert.ok([...rolling.tracks.values()].every(track=>track.ranges.length<=256));
+    rolling.write(bytes.subarray(moof,firstMdatEnd));assert.ok(rolling.ranges().every(([a,b])=>b-a<2),'A late fragment with a backward timestamp cannot turn missing minutes into a fake contiguous buffer');
+  }
  }
  const oversized=new Mp4Timeline(),header=Buffer.alloc(8);header.writeUInt32BE(4*1024*1024);header.write('moov',4);oversized.write(header);assert.equal(oversized.disabled,true);assert.deepEqual(oversized.ranges(),[]);
  const malformed=new Mp4Timeline();malformed.write(Buffer.from([0,0,0,2,109,111,111,102]));assert.equal(malformed.disabled,true);

@@ -13,7 +13,7 @@ function describeSite(raw, base, index) {
   const site = { key: String(raw.key || index), name: text(raw.name || raw.key || '未命名站点'), type: Number(raw.type ?? 1), api: String(raw.api || ''), headers: cleanHeaders(raw.header || raw.headers), searchable: Number(raw.searchable ?? 1) === 1, quickSearch: Number(raw.quickSearch ?? 1) === 1, changeable: Number(raw.changeable ?? 1) === 1, supported: false, reason: '' };
   try {
     const adapter = htmlSites.describe(raw, base);
-    if (adapter) return Object.assign(site, adapter);
+    if (adapter) return Object.assign(site, adapter, raw.jar ? { materialDeclaration: String(raw.jar) } : {});
     let endpoint = site.api;
     if (/^csp_T4(?:Guard)?$/.test(site.api)) {
       const extension = decodeFtyExtension(raw.ext);

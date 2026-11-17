@@ -1,6 +1,6 @@
 {
   "name": "mobile-tv-screen",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "Windows LAN media casting receiver with DLNA, basic AirPlay, TVBox compatibility and a browser remote",
   "author": "gemron",
   "repository": {
@@ -28,7 +28,7 @@
     "test:library:browser": "node tests/library-browser.js",
     "test:adfilter:browser": "node tests/ad-filter-browser.js",
     "test:source-browser": "node tests/source-browser.js",
-    "test": "node tests/player.js && node tests/skip-segments.js && node tests/proxy.js && node tests/remux-buffer.js && node tests/mp4-timeline.js && node tests/remux-sync.js && node tests/artwork.js && node tests/cache.js && node tests/original-range-cache.js && node tests/original-http-pool.js && node tests/original-buffer-profile.js && node tests/library.js && node tests/episode-cancellation.js && node tests/library-collection.js && node tests/schedule.js && node tests/hmys-transport.js && node tests/source-edge-cases.js && node tests/html-sites.js && node tests/content-adapters.js && node tests/playback-compat.js && node tests/subtitles.js && node tests/cloud-accounts.js && node tests/cloud-share.js && node tests/quark-cleanup.js && node tests/media-tracks.js && node tests/search-matching.js && node tests/discovery-search.js && node tests/source-probe.js && node tests/source-material.js && node tests/ad-filter.js && node tests/torrents.js && node tests/bilibili-media.js && node tests/bilibili-cast.js && node tests/tvbox.js && node tests/verify.js",
+    "test": "node tests/player.js && node tests/skip-segments.js && node tests/proxy.js && node tests/remux-buffer.js && node tests/mp4-timeline.js && node tests/remux-sync.js && node tests/remux-seek-cache.js && node tests/artwork.js && node tests/cache.js && node tests/original-range-cache.js && node tests/original-seek-cache.js && node tests/original-http-pool.js && node tests/original-buffer-profile.js && node tests/library.js && node tests/episode-cancellation.js && node tests/library-collection.js && node tests/schedule.js && node tests/hmys-transport.js && node tests/source-edge-cases.js && node tests/html-sites.js && node tests/content-adapters.js && node tests/playback-compat.js && node tests/subtitles.js && node tests/cloud-accounts.js && node tests/cloud-share.js && node tests/quark-cleanup.js && node tests/media-tracks.js && node tests/search-matching.js && node tests/discovery-search.js && node tests/source-probe.js && node tests/source-material.js && node tests/xs-adapters.js && node tests/ad-filter.js && node tests/torrents.js && node tests/bilibili-media.js && node tests/bilibili-cast.js && node tests/tvbox.js && node tests/verify.js",
     "test:remux:browser": "node tests/remux-buffer-browser.js",
     "test:subtitles:browser": "node tests/subtitles-browser.js",
     "test:media-tracks:browser": "node tests/media-tracks-browser.js"

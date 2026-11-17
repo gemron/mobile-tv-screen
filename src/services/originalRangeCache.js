@@ -1,5 +1,6 @@
 const { createHash } = require('crypto');
 const { Readable } = require('stream');
+const { setTimeout: delay } = require('timers/promises');
 const MIB = 1024 * 1024;
 const BUFFER_PROFILES = [
   { edge: 3200, label: '4K', max: 512, minAhead: 96, maxAhead: 384, seconds: 180 },
@@ -23,7 +24,7 @@ async function abortable(promise, signal) {
 // A bounded playback buffer, scoped to the signed URL and its credential context.
 // Only a bounded window is prefetched, independent of the full movie size.
 class OriginalRangeCache {
-  constructor({ open, blockBytes = 96 * 1024, maxBytes = 32 * 1024 * 1024, concurrency = 96, ahead = 240, adaptive = false } = {}) {
+  constructor({ open, blockBytes = 96 * 1024, maxBytes = 32 * 1024 * 1024, concurrency = 96, ahead = 240, adaptive = false, maxRetries = 2, blockTimeoutMs = 12000, retryDelayMs = 100 } = {}) {
     this.open = open;
     this.blockBytes = blockBytes;
     this.maxBytes = maxBytes;
@@ -31,6 +32,7 @@ class OriginalRangeCache {
     this.ahead = Math.min(ahead, Math.max(0, Math.floor(maxBytes / blockBytes) - concurrency));
     this.base = { maxBytes, ahead: this.ahead, concurrency };
     this.adaptive = adaptive;
+    this.maxRetries=maxRetries;this.blockTimeoutMs=blockTimeoutMs;this.retryDelayMs=retryDelayMs;this.rangeRetries=0;this.timeouts=0;
     this.videoInfo = null;
     this.profile = '默认';
     this.targetSeconds = 0;
@@ -39,6 +41,7 @@ class OriginalRangeCache {
     this.sources = new Map();
     this.bytes = this.running = this.hits = this.misses = this.coalesced = this.downloadedBytes = this.failures = 0;
     this.receivedBytes = 0;
+    this.evictions = 0;
     this.media = '';
     this.closed = false;
   }
@@ -74,19 +77,30 @@ class OriginalRangeCache {
     const { width, height, duration } = this.videoInfo;
     const profile = BUFFER_PROFILES.find(item => Math.max(width, height) >= item.edge);
     const rate = this.window?.total && duration ? this.window.total / duration : 0;
+    const wanted=rate?rate*profile.seconds*1.25:profile.minAhead*MIB;
+    const tier=[...BUFFER_PROFILES].reverse().find(item=>item.max>=profile.max&&item.maxAhead*MIB>=wanted)||BUFFER_PROFILES[0];
     // Add headroom for bitrate variation, with a byte budget independent of
     // untrusted metadata and without allocating the maximum up front.
-    const desired = Math.max(profile.minAhead * MIB, Math.min(profile.maxAhead * MIB, rate ? rate * profile.seconds * 1.25 : profile.minAhead * MIB));
-    const maxBytes = profile.max * MIB;
-    const concurrency = Math.max(this.base.concurrency, profile.edge >= 3200 ? 384 : profile.edge >= 2304 ? 192 : 96);
+    const desired = Math.max(profile.minAhead * MIB, Math.min(tier.maxAhead * MIB, wanted));
+    const maxBytes = tier.max * MIB;
+    const concurrency = Math.max(this.base.concurrency, tier.max>=512 ? 384 : tier.max>=256 ? 192 : 96);
     const ahead = Math.min(Math.ceil(desired / this.blockBytes), Math.max(0, Math.floor(maxBytes / this.blockBytes) - concurrency));
     if (this.maxBytes === maxBytes && this.ahead === ahead && this.profile === profile.label) return;
-    this.maxBytes = maxBytes; this.ahead = ahead; this.concurrency = concurrency; this.profile = profile.label; this.targetSeconds = profile.seconds;
-    while (this.bytes > this.maxBytes && this.entries.size) {
-      const key = this.entries.keys().next().value;
-      this.bytes -= this.entries.get(key).body.length; this.entries.delete(key);
-    }
+    this.maxBytes = maxBytes; this.ahead = ahead; this.concurrency = concurrency; this.profile = profile.label; this.targetSeconds = profile.seconds;this.highBitrate=tier.max>profile.max;
+    this.trim(this.maxBytes);
     if (this.window) this.plan(this.window);
+  }
+
+  trim(limit) {
+    while(this.bytes>limit&&this.entries.size){
+      const source=this.window;let victim;
+      // General LRU kept recently PLAYED blocks newer than prefetched ones.
+      // Once full, it evicted the NEXT unread block and downloaded it again.
+      // Keep the active forward window; discard history/other windows first.
+      if(source)for(const [key,entry]of this.entries){if(entry.sourceKey!==source.key||!entry.metadata&&(entry.index<source.anchor||entry.index>source.anchor+this.ahead)){victim=key;break;}}
+      if(victim===undefined){let farthest=-1;for(const [key,entry]of this.entries)if(entry.index>farthest){victim=key;farthest=entry.index;}}
+      victim??=this.entries.keys().next().value;this.bytes-=this.entries.get(victim).body.length;this.entries.delete(victim);this.evictions++;
+    }
   }
 
   source(url, headers, scope) {
@@ -95,10 +109,11 @@ class OriginalRangeCache {
     if (!source) {
       // Playback has one active read-ahead window, even with several viewers.
       for (const other of this.sources.values()) this.cancelAhead(other, -1);
-      source = { key, url, headers: { ...headers }, total: 0, anchor: 0, urgentUntil: 0 };
+      source = { key, url, headers: { ...headers }, total: 0, anchor: 0, urgentUntil: 0, failed: new Map(), consumers: new Set(), prefetchPaused: false };
       this.sources.set(key, source);
       while (this.sources.size > 8) {
         const old = this.sources.values().next().value;
+        for (const consumer of [...old.consumers]) consumer.cancel();
         for (const job of [...this.jobs.values()]) if (job.source === old) this.cancel(job);
         this.sources.delete(old.key);
       }
@@ -128,7 +143,7 @@ class OriginalRangeCache {
   }
 
   plan(source) {
-    if (this.closed || this.window !== source || this.sources.get(source.key) !== source || !source.total) return;
+    if (this.closed || this.clearing || source.prefetchPaused || this.window !== source || this.sources.get(source.key) !== source || !source.total) return;
     this.cancelAhead(source, source.anchor);
     const last = Math.min(source.anchor + this.ahead, Math.ceil(source.total / this.blockBytes) - 1);
     for (let index = source.anchor + 1; index <= last; index++) {
@@ -136,6 +151,7 @@ class OriginalRangeCache {
       // Planning is frequent while a 4K window fills. Do not attach another
       // promise handler to every existing job, or refresh speculative LRU hits.
       if (this.entries.has(key) || this.jobs.has(key) && !this.jobs.get(key).cancelled) continue;
+      if((source.failed.get(index)?.until||0)>Date.now())continue;
       if (this.jobs.size >= this.ahead + this.concurrency + 8) break;
       this.ensure(source, index, false, true);
     }
@@ -171,7 +187,7 @@ class OriginalRangeCache {
   }
 
   pump() {
-    if (this.closed) return;
+    if (this.closed || this.clearing) return;
     if (this.running >= this.concurrency && [...this.jobs.values()].some(job => job.demand && !job.running && !job.cancelled) && ![...this.jobs.values()].some(job => job.running && job.cancelled)) {
       // A seek must not wait behind a full window of speculative reads.
       const speculative = [...this.jobs.values()].reverse().find(job => job.running && !job.demand && !job.cancelled && (job.received || 0) < (job.expected ?? Infinity));
@@ -184,11 +200,12 @@ class OriginalRangeCache {
     for (const job of ordered) {
       if (this.running >= this.concurrency) break;
       if (job.cancelled || job.running) continue;
+      if (!job.demand && job.source.prefetchPaused) continue;
       if (!job.demand && job.source.anchor < job.source.urgentUntil && (runningBySource.get(job.source) || 0) >= 3) continue;
       job.running = true; job.started = Date.now(); this.running++;
       runningBySource.set(job.source, (runningBySource.get(job.source) || 0) + 1);
       this.fetch(job).then(entry => { job.finish(); job.resolve(entry); }, error => {
-        if (!job.cancelled) this.failures++;
+        if (!job.cancelled) {this.failures++;const count=(job.source.failed.get(job.index)?.count||0)+1;job.source.failed.set(job.index,{count,until:Date.now()+Math.min(30000,2000*2**Math.min(count-1,4))});while(job.source.failed.size>this.ahead+this.concurrency+8)job.source.failed.delete(job.source.failed.keys().next().value);}
         job.finish(error); job.reject(error);
       }).finally(() => {
         this.running--;
@@ -201,66 +218,96 @@ class OriginalRangeCache {
   async fetch(job) {
     const { source, index, controller } = job;
     const start = index * this.blockBytes, end = start + this.blockBytes - 1;
-    const headers = { ...source.headers };
-    for (const name of Object.keys(headers)) if (/^(range|if-range)$/i.test(name)) delete headers[name];
-    headers.Range = `bytes=${start}-${end}`;
-    const { upRes } = await this.open(source.url, headers, 5, controller.signal);
-    try {
+    let length=0,metadata;
+    for(let attempt=0;;attempt++){
+      controller.signal.throwIfAborted();job.attempt=attempt;
+      const bounded=AbortSignal.any([controller.signal,AbortSignal.timeout(this.blockTimeoutMs)]),headers={...source.headers};let upRes;
+      const abort=()=>upRes?.destroy(bounded.reason);
+      for(const name of Object.keys(headers))if(/^(range|if-range)$/i.test(name))delete headers[name];
+      headers.Range=`bytes=${start+length}-${end}`;
+      if(length&&metadata?.etag&&!metadata.etag.startsWith('W/'))headers['If-Range']=metadata.etag;
+      try {
+      ({upRes}=await this.open(source.url,headers,5,bounded));
+      bounded.addEventListener('abort',abort,{once:true});bounded.throwIfAborted();
+      if([408,429,500,502,503,504].includes(upRes.statusCode))throw Object.assign(new Error('Temporary original-file response'),{retryable:true});
       const unsatisfied = /^bytes \*\/(\d+)$/.exec(upRes.headers['content-range'] || '');
-      if (upRes.statusCode === 416 && unsatisfied && Number.isSafeInteger(Number(unsatisfied[1])) && start >= Number(unsatisfied[1])) {
+      if (!length && upRes.statusCode === 416 && unsatisfied && Number.isSafeInteger(Number(unsatisfied[1])) && start >= Number(unsatisfied[1])) {
         source.total = Number(unsatisfied[1]);
         const entry = { body: Buffer.alloc(0), total: source.total }; job.headerResolve(entry); return entry;
       }
       const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(upRes.headers['content-range'] || '');
       const total = Number(match?.[3]);
-      if (upRes.statusCode !== 206 || !match || !Number.isSafeInteger(total) || total <= start || Number(match[1]) !== start || Number(match[2]) !== Math.min(end, total - 1) || (source.total && source.total !== total)) throw new Error('Invalid original-file range response');
+      if (upRes.statusCode !== 206 || !match || !Number.isSafeInteger(total) || total <= start+length || Number(match[1]) !== start+length || Number(match[2]) !== Math.min(end, total - 1) || (source.total && source.total !== total) || metadata?.etag&&upRes.headers.etag&&metadata.etag!==upRes.headers.etag) throw Object.assign(new Error('Invalid original-file range response'),{retryable:false});
       source.total = total;
       this.updateProfile();
-      const metadata = { total, type: upRes.headers['content-type'] || 'video/mp4', etag: upRes.headers.etag, modified: upRes.headers['last-modified'] };
+      metadata ||= { total, type: upRes.headers['content-type'] || 'video/mp4', etag: upRes.headers.etag, modified: upRes.headers['last-modified'] };
       job.headerResolve(metadata);
       // Overlap the following reads with this block's transfer, not its completion.
       this.plan(source);
       const expected = Math.min(this.blockBytes, total - start), chunks = job.chunks;
       job.expected = expected;
-      let length = 0;
       for await (const chunk of upRes) {
+        controller.signal.throwIfAborted();bounded.throwIfAborted();
         length += chunk.length;
         job.received = length;
-        if (length > expected) throw new Error('Original-file range exceeded buffer size');
+        if (length > expected) throw Object.assign(new Error('Original-file range exceeded buffer size'),{retryable:false});
         this.receivedBytes += chunk.length;
         chunks.push(chunk);
         job.wake();
+        // Content-Range already defines this block completely. A CDN may send
+        // its final bytes well before closing the HTTP/2 stream; do not time
+        // out and retry from end + 1 after the whole block has arrived.
+        if (length === expected) break;
       }
+      if (upRes.destroyed && !upRes.closed) await new Promise(resolve => upRes.once('close', resolve));
       if (length !== expected || job.cancelled || controller.signal.aborted) throw new Error('Incomplete original-file range');
-      const entry = { ...metadata, body: Buffer.concat(chunks, length) };
+      const entry = { ...metadata, sourceKey: source.key, index, metadata: Boolean(job.metadata), body: Buffer.concat(chunks, length) };
       this.downloadedBytes += length;
-      if (this.sources.get(source.key) === source && length <= this.maxBytes) {
-        while (this.bytes + length > this.maxBytes && this.entries.size) {
-          const first = this.entries.keys().next().value;
-          this.bytes -= this.entries.get(first).body.length; this.entries.delete(first);
-        }
+      source.failed.delete(index);
+      const useful=job.demand||this.window===source&&index>=source.anchor&&index<=source.anchor+this.ahead;
+      if (this.sources.get(source.key) === source && length <= this.maxBytes && (useful||this.bytes+length<=this.maxBytes)) {
+        const previous=this.entries.get(job.key);if(previous){this.bytes-=previous.body.length;this.entries.delete(job.key);}
+        this.trim(this.maxBytes-length);
         this.entries.set(job.key, entry); this.bytes += length;
       }
       return entry;
-    } finally { upRes.destroy(); }
+      }catch(error){
+        upRes?.destroy();
+        controller.signal.throwIfAborted();if(job.cancelled||this.closed)throw error;
+        if(bounded.aborted)this.timeouts++;
+        if(attempt>=this.maxRetries||error.retryable===false)throw error;
+        this.rangeRetries++;await delay(this.retryDelayMs*(attempt+1),undefined,{signal:controller.signal});
+      }finally{bounded.removeEventListener('abort',abort);upRes?.destroy();}
+    }
   }
 
-  async read(url, headers, scope, range, signal, stream = false, allowSmall = false) {
-    if (signal?.aborted) throw Object.assign(new Error('Playback request cancelled'), { name: 'AbortError' });
+  async read(url, headers, scope, range, signal, stream = false, allowSmall = false, consumer = null) {
+    if (signal?.aborted || consumer?.active === false) throw Object.assign(new Error('Playback request cancelled'), { name: 'AbortError' });
     const match = /^bytes=(\d+)-(\d*)$/.exec(range || '');
-    if (!match || this.closed) return null;
+    if (!match || this.closed || this.clearing) return null;
     const start = Number(match[1]), requestedEnd = match[2] ? Number(match[2]) : Infinity;
     if (!Number.isSafeInteger(start) || (requestedEnd !== Infinity && !Number.isSafeInteger(requestedEnd)) || requestedEnd < start) return null;
     // Leave tiny sniffing requests alone rather than fetching a megabyte for two bytes.
-    if (!allowSmall && requestedEnd - start < 64 * 1024 - 1) return null;
+    if (!allowSmall && !consumer?.seekRead && requestedEnd - start < 64 * 1024 - 1) return null;
     const source = this.source(url, headers, scope), index = Math.floor(start / this.blockBytes);
+    // FFmpeg probes the header and tail index again before a nonzero seek.
+    // These bounded reads must not replace the warm playback window or start
+    // speculative downloads from byte zero. Keep small edge regions, rounded
+    // to blocks, inside the same total memory budget.
+    const edge = Math.min(2 * MIB, this.maxBytes / 16);
+    const metadata = Boolean(consumer?.seekRead && (start < edge || source.total && start >= source.total - edge));
+    if (consumer) { consumer.source = source; consumer.probing = metadata; source.consumers.add(consumer); }
+    source.prefetchPaused = metadata ? ![...source.consumers].some(reader => reader.active && !reader.probing) : false;
     // After a distant seek, feed the current position before allowing a
     // large speculative window to compete for bandwidth.
-    if (index > source.anchor + this.ahead || index < source.anchor - 1) source.urgentUntil = index + 3;
-    source.anchor = index; source.position = start;
-    this.cancelAhead(source, index);
+    if (!metadata) {
+      if (index > source.anchor + this.ahead || index < source.anchor - 1) source.urgentUntil = this.entries.has(source.key + ':' + index) ? 0 : index + 3;
+      source.anchor = index; source.position = start;
+      this.cancelAhead(source, index);
+    } else if (source.prefetchPaused) this.cancelAhead(source, -1);
     if (source.total && start >= source.total) return { status: 416, headers: { 'Content-Range': `bytes */${source.total}` }, body: Buffer.alloc(0) };
     const pending = this.ensure(source, index, true);
+    if (metadata && pending.job) pending.job.metadata = true;
     const lease = pending.job;
     let released = false;
     if (lease) lease.readers = (lease.readers || 0) + 1;
@@ -270,7 +317,7 @@ class OriginalRangeCache {
       signal?.removeEventListener('abort', release);
       if (lease && --lease.readers === 0) {
         lease.demand = false;
-        this.cancelAhead(source, this.window === source ? source.anchor : -1);
+        this.cancelAhead(source, this.window === source && !source.prefetchPaused ? source.anchor : -1);
         this.pump();
       }
     };
@@ -279,6 +326,7 @@ class OriginalRangeCache {
     let entry;
     try { entry = await abortable(job ? job.header : pending, signal); }
     catch (error) { release(); throw error; }
+    if (metadata && entry.body) entry.metadata = true;
     if (start >= entry.total) { release(); return { status: 416, headers: { 'Content-Range': `bytes */${entry.total}` }, body: Buffer.alloc(0) }; }
     this.plan(source);
     const offset = start - index * this.blockBytes, end = Math.min(requestedEnd, (index + 1) * this.blockBytes - 1, entry.total - 1);
@@ -292,9 +340,32 @@ class OriginalRangeCache {
     return { status: 206, headers: responseHeaders, body, stream: bodyStream };
   }
 
-  async response(url, headers, scope, range, signal) {
-    const first = await this.read(url, headers, scope, range, signal, true);
-    if (!first || first.status !== 206) return first;
+  async response(url, headers, scope, range, signal, { seekRead = false } = {}) {
+    const controller = new AbortController();
+    const combined = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal;
+    let output;
+    const consumer = { active: true, source: null, seekRead, probing: false, cancel: () => { release(); output?.destroy(); } };
+    const release = () => {
+      if (!consumer.active) return;
+      consumer.active = false;
+      combined.removeEventListener('abort', release);
+      const source = consumer.source;
+      if (source) {
+        source.consumers.delete(consumer);
+        source.prefetchPaused = ![...source.consumers].some(reader => reader.active && !reader.probing);
+      }
+      // Abort reads awaiting headers/chunks even when the caller destroyed the
+      // response without providing an external AbortSignal. Completed entries
+      // stay available for a backward seek; only unused work is cancelled.
+      controller.abort();
+      if (source?.prefetchPaused) this.cancelAhead(source, -1);
+      this.pump();
+    };
+    combined.addEventListener('abort', release, { once: true });
+    let first;
+    try { first = await this.read(url, headers, scope, range, combined, true, false, consumer); }
+    catch (error) { release(); throw error; }
+    if (!first || first.status !== 206) { release(); return first; }
     const requested = /^bytes=(\d+)-(\d*)$/.exec(range);
     const total = Number(first.headers['Content-Range'].split('/')[1]);
     const start = Number(requested[1]), end = requested[2] ? Math.min(Number(requested[2]), total - 1) : total - 1;
@@ -307,18 +378,26 @@ class OriginalRangeCache {
       let part = first, position = start;
       try {
         while (position <= end) {
-          if (signal?.aborted) throw Object.assign(new Error('Playback request cancelled'), { name: 'AbortError' });
+          if (combined.aborted) throw Object.assign(new Error('Playback request cancelled'), { name: 'AbortError' });
           if (part.stream) yield* part.stream;
           else yield part.body;
           position += Number(part.headers['Content-Length']);
           if (position <= end) {
-            part = await cache.read(url, headers, scope, `bytes=${position}-${end}`, signal, true, true);
+            part = await cache.read(url, headers, scope, `bytes=${position}-${end}`, combined, true, true, consumer);
             if (!part || part.status !== 206) throw new Error('Original-file stream interrupted');
           }
         }
-      } finally { part?.stream?.destroy(); }
+      } finally { release(); part?.stream?.destroy(); }
     })(), { objectMode: false, highWaterMark: 64 * 1024 });
-    stream.once('close', () => first.stream?.destroy());
+    output = stream;
+    const destroy = stream._destroy;
+    stream._destroy = function (error, callback) {
+      // Readable.from waits for iterator cleanup. Cancel the pending upstream
+      // first, otherwise a seek can wait for that same upstream to produce data.
+      release();
+      destroy.call(this, error, callback);
+    };
+    stream.once('close', () => { release(); first.stream?.destroy(); });
     return { status: 206, headers: responseHeaders, stream };
   }
 
@@ -352,14 +431,24 @@ class OriginalRangeCache {
       contiguousAheadBytes += Math.max(0, entry.body.length - (index === source.anchor ? (source.position || 0) % this.blockBytes : 0));
     }
     const rate = source?.total && this.videoInfo?.duration ? source.total / this.videoInfo.duration : 0;
-    return { active: Boolean(this.window || this.videoInfo), profile: this.profile, targetSeconds: this.targetSeconds, bytes: this.bytes, maxBytes: this.maxBytes, blockBytes: this.blockBytes, parallelLimit: this.concurrency, aheadBytes: this.ahead * this.blockBytes, contiguousAheadBytes, estimatedAheadSeconds: rate ? contiguousAheadBytes / rate : 0, entries: this.entries.size, filling: this.running, queued: [...this.jobs.values()].filter(job => !job.running).length, hits: this.hits, misses: this.misses, coalesced: this.coalesced, downloadedBytes: this.downloadedBytes, receivedBytes: this.receivedBytes, failures: this.failures };
+    let forwardBytes=0,historyBytes=0;for(const entry of this.entries.values())if(entry.sourceKey===source?.key){if(entry.index>=source.anchor)forwardBytes+=entry.body.length;else historyBytes+=entry.body.length;}
+    const head=source?this.jobs.get(source.key+':'+source.anchor):null;
+    const failedAhead=source?[...source.failed.keys()].filter(index=>index>=source.anchor&&index<=source.anchor+this.ahead).length:0;
+    return { active: Boolean(this.window || this.videoInfo), profile: this.profile, highBitrate:Boolean(this.highBitrate), targetSeconds: this.targetSeconds, bytes: this.bytes, maxBytes: this.maxBytes, blockBytes: this.blockBytes, parallelLimit: this.concurrency, aheadBytes: this.ahead * this.blockBytes, contiguousAheadBytes, forwardBytes, historyBytes, readOffset:source?.position||0, totalBytes:source?.total||0, headWaitingMs:head?.started&&!head.done?Date.now()-head.started:0, estimatedAheadSeconds: rate ? contiguousAheadBytes / rate : 0, entries: this.entries.size, filling: this.running, queued: [...this.jobs.values()].filter(job => !job.running).length, hits: this.hits, misses: this.misses, coalesced: this.coalesced, downloadedBytes: this.downloadedBytes, receivedBytes: this.receivedBytes, failures: this.failures, evictions:this.evictions, retries:this.rangeRetries, timeouts:this.timeouts, failedAhead };
   }
 
   clear() {
+    this.clearing = true;
+    // Invalidate entire response readers, including ones paused on cached data.
+    // Cancelling only network jobs lets an old reader repopulate the cache after
+    // Stop or a media change when it resumes its next block.
+    for (const source of this.sources.values()) for (const consumer of [...source.consumers]) consumer.cancel();
     for (const job of [...this.jobs.values()]) this.cancel(job);
     this.entries.clear(); this.sources.clear(); this.window = null; this.bytes = 0;
     this.videoInfo = null; this.profile = '默认'; this.targetSeconds = 0;
+    this.highBitrate=false;
     this.maxBytes = this.base.maxBytes; this.ahead = this.base.ahead; this.concurrency = this.base.concurrency;
+    this.clearing = false;
   }
 
   close() { this.closed = true; this.clear(); }

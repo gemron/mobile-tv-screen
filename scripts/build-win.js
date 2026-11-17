@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
+const { stage } = require('./package-dependencies');
 const root = path.resolve(__dirname, '..');
 const pkg = require('../package.json');
 const lock = require('../package-lock.json');
@@ -43,17 +44,11 @@ async function main() {
   for (const file of ['README.md', 'LICENSE', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'CONTRIBUTING.md']) copy(path.join(root, file), path.join(release, file));
   copy(path.join(root, 'docs'), path.join(release, 'docs'));
   copy(path.join(root, 'docs', 'CONTENT_SOURCES.md'), path.join(release, 'docs', 'CONTENT_SOURCES.md'));
-  const dependencies = [];
-  for (const [relative, entry] of Object.entries(lock.packages)) {
-    if (!relative.startsWith('node_modules/') || entry.dev) continue;
-    const source = path.join(root, relative);
-    if (!fs.existsSync(source)) { if (entry.optional) continue; throw new Error(`Missing locked dependency: ${relative}`); }
-    copy(source, path.join(app, relative));
-    dependencies.push({ name: relative.replace(/^node_modules\//, ''), version: entry.version, license: entry.license || 'See bundled package' });
-  }
+  const staged = stage(root, app, lock.packages), dependencies = staged.dependencies;
+  console.log(`Production dependency files: ${(staged.shippedBytes / 1048576).toFixed(1)} MiB`);
   const runtime = path.join(release, 'runtime', 'node.exe');
   copy(process.execPath, runtime);
-  const preparedFfmpeg = path.join(root, 'build', 'tools', 'ffmpeg-8.0.1-full_build', 'bin', 'ffmpeg.exe');
+  const preparedFfmpeg = path.join(root, 'build', 'tools', 'ffmpeg-8.1.2-essentials_build', 'bin', 'ffmpeg.exe');
   const ffmpegPath = fs.realpathSync(process.env.FFMPEG_PATH || (fs.existsSync(preparedFfmpeg) ? preparedFfmpeg : run('where.exe', ['ffmpeg.exe']).trim().split(/\r?\n/)[0]));
   const ffmpeg = path.join(release, 'tools', 'ffmpeg.exe');
   copy(ffmpegPath, ffmpeg);
@@ -89,8 +84,8 @@ async function main() {
     `MobileTV ${pkg.version} · Windows 64 位免安装版`, '',
     '用途声明：仅供学习研究和非商业技术测试使用，禁止商业售卖。',
     '第三方组件及历史 MIT 代码遵循各自许可证，详见 LICENSE 和 THIRD_PARTY_NOTICES.md。', '',
-    '本版新增：音轨和内置字幕选择、免费字幕搜索、片头片尾自动跳过。',
-    '修复可播缓冲与进度条显示、部分影片无声、MKV 字幕读取超时和倍速点击问题。',
+    '本版新增：XS 订阅适配、片源镜像切换；修复海报、拖动缓存和返回列表状态。',
+    '缩小媒体工具和依赖体积，保留音轨、内置字幕、免费字幕搜索和片头片尾跳过。',
     '夸克临时剧集默认在播完／换集后或空间不足时移入回收站，可在账号管理关闭。',
     '只清理本软件转存记录中的文件，保护当前播放和正在保存的文件，不清空回收站。',
     '夸克原文件按实际分辨率使用 32–512 MiB 有界缓冲，兼容封装另有 64 MiB 成品预读。',

@@ -296,7 +296,7 @@ function createProxyRouter(options = {}) {
     const cacheKey = cache.key(targetUrl, cacheScope);
     if (req.method === 'GET' && !req.headers['if-range'] && originalCache.eligible(targetUrl, headerContext, req.headers.range)) {
       try {
-        const entry = await originalCache.response(targetUrl, upstreamHeaders, cacheScope, req.headers.range, controller.signal);
+        const entry = await originalCache.response(targetUrl, upstreamHeaders, cacheScope, req.headers.range, controller.signal, { seekRead: req.query.seekRead === '1' });
         if (clientClosed) { entry?.stream?.destroy(); return; }
         if (entry) {
           res.status(entry.status).set(entry.headers);
@@ -422,6 +422,7 @@ function createProxyRouter(options = {}) {
 
   // Low-latency FFmpeg stream remux / transcode endpoint for incompatible codecs (e.g. HEVC/MKV/RTSP)
   router.get('/transcode', (req, res) => {
+    if (req.aborted || res.destroyed) return;
     const targetUrl = String(req.query.url || '').trim();
     const explicitReferer = String(req.query.referer || '').trim();
     const headerContext = String(req.query.headerContext || '');
@@ -462,7 +463,13 @@ function createProxyRouter(options = {}) {
     }
 
     if (startPosition > 0) args.push('-ss', String(startPosition));
-    const inputUrl = mediaHeaders.hasPlaylistContext(headerContext, targetUrl) ? `http://127.0.0.1:${req.socket.localPort}/api/proxy?url=${encodeURIComponent(targetUrl)}&headerContext=${encodeURIComponent(headerContext)}&hls=1` : targetUrl;
+    let inputUrl = mediaHeaders.hasPlaylistContext(headerContext, targetUrl) ? `http://127.0.0.1:${req.socket.localPort}/api/proxy?url=${encodeURIComponent(targetUrl)}&headerContext=${encodeURIComponent(headerContext)}&hls=1` : targetUrl;
+    if (startPosition > 0) {
+      try {
+        const proxy = new URL(inputUrl);
+        if (proxy.origin === `http://127.0.0.1:${req.socket.localPort}` && proxy.pathname === '/api/proxy') { proxy.searchParams.set('seekRead', '1'); inputUrl = proxy.href; }
+      } catch { /* Direct inputs keep their existing request behavior. */ }
+    }
     args.push('-i', inputUrl);
     if (audioUrl) {
       const audioHeaders = { ...Object.fromEntries(Object.entries(resolveUpstreamHeaders(headerContext ? '' : audioUrl, explicitReferer)).map(([key,value])=>[key.toLowerCase(),value])), ...(headerContext ? mediaHeaders.get(headerContext,audioUrl) : {}) };
@@ -515,6 +522,7 @@ function createProxyRouter(options = {}) {
     const killFfmpeg = () => {
       if (closed) return;
       closed = true;
+      reserve.destroy();
       try {
         ff.kill('SIGKILL');
       } catch {
@@ -548,9 +556,15 @@ function createProxyRouter(options = {}) {
       }
     });
 
-    pipeline(ff.stdout, reserve, res, err => {
-      if (err) killFfmpeg();
-    });
+    if (req.aborted || res.destroyed) { killFfmpeg(); return; }
+    try {
+      pipeline(ff.stdout, reserve, res, err => { if (err) killFfmpeg(); });
+    } catch {
+      // A replaced media request can already be closed before pipeline attaches.
+      // Synchronous setup failure must release both FFmpeg and its reserve too.
+      killFfmpeg();
+      if (!res.destroyed) res.destroy();
+    }
   });
 
   return router;

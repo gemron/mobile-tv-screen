@@ -444,7 +444,7 @@ async function createAppServer(options = {}) {
   };
   const onProgress = (prog) => {
     const buffer = proxyRouter.originalCache.stats();
-    broadcastWs({ type: 'progress', data: { ...prog, originalBuffer: buffer.active ? { active: true, profile: buffer.profile, bytes: buffer.bytes, maxBytes: buffer.maxBytes, aheadBytes: buffer.aheadBytes, targetSeconds: buffer.targetSeconds, contiguousAheadBytes: buffer.contiguousAheadBytes, estimatedAheadSeconds: buffer.estimatedAheadSeconds } : { active: false }, remuxBuffer: proxyRouter.remuxBufferStats() } });
+    broadcastWs({ type: 'progress', data: { ...prog, originalBuffer: buffer.active ? { active: true, profile: buffer.profile, highBitrate: buffer.highBitrate, bytes: buffer.bytes, maxBytes: buffer.maxBytes, aheadBytes: buffer.aheadBytes, targetSeconds: buffer.targetSeconds, contiguousAheadBytes: buffer.contiguousAheadBytes, historyBytes: buffer.historyBytes, estimatedAheadSeconds: buffer.estimatedAheadSeconds } : { active: false }, remuxBuffer: proxyRouter.remuxBufferStats() } });
   };
   const onCommand = (cmd) => broadcastWs({ type: 'command', data: cmd }, 'tv');
   const onLog = (entry) => broadcastWs({ type: 'log', data: entry });

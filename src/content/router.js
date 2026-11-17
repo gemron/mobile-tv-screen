@@ -5,7 +5,7 @@ function createLibraryRouter(options) {
   const router = express.Router(), library = new Library(options);
   const task = handler => async (req, res) => {
     try { const result = await handler(req, res); if (!res.destroyed) res.json(result); }
-    catch (error) { if (!res.destroyed) res.status(error.status || (error.name === 'AbortError' ? 409 : 502)).json({ error: error.name === 'AbortError' ? '操作已取消或被新的请求替代' : error.message, ...(error.capacityLimited?{capacityLimited:true}:{}),...(error.verifyUrl ? { verifyUrl: error.verifyUrl } : {}),...(error.requiresSave ? {requiresSave:true,saveFile:{...error.saveFile,cleanupMode:library.cloud.cleanup.mode}} : {}) }); }
+    catch (error) { if (!res.destroyed) res.status(error.status || (error.name === 'AbortError' ? 409 : 502)).json({ error: error.name === 'AbortError' ? '操作已取消或被新的请求替代' : error.message, ...(error.code === 'SOURCE_REGION_BLOCKED' ? { code: error.code } : {}), ...(error.capacityLimited?{capacityLimited:true}:{}),...(error.verifyUrl ? { verifyUrl: error.verifyUrl } : {}),...(error.requiresSave ? {requiresSave:true,saveFile:{...error.saveFile,cleanupMode:library.cloud.cleanup.mode}} : {}) }); }
   };
   const playbackTask = handler => task(async (req, res) => {
     const controller = new AbortController(), cancel = () => { if (!res.writableEnded) controller.abort(); };

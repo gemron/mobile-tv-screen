@@ -66,6 +66,7 @@ function cleanHeaders(value = {}) {
   if (typeof value === 'string') { try { value = json(value); } catch { value = {}; } }
   const allowed = new Set(['user-agent', 'referer', 'origin', 'cookie', 'authorization', 'accept', 'accept-language', 'content-type', 'sign', 't', 'deviceid', 'version', 'app-version', 'app-id', 'appkey', 'timestamp', 'token', 'os', 'app', 'plat', 'platform', 'x-requested-with', 'x-listening-session', 'x-listening-timezone']);
   const result = {};
+  for (const name of ['publicparams','uuid','nonce','api_version','client_type','md5','app-user-device-id','app-user-token','app-version-code','app-api-verify-time','app-api-verify-sign','app-ui-mode']) allowed.add(name);
   for(const name of ['key','api-ver','ver','code','client-version','packagename','app_id','channel_code','cur_time','device_id','mob_mfr','mobmodel','package_name','sys_platform','sysrelease','x-share-token','x-device-id','x-signature'])allowed.add(name);
   for (const [original, raw] of Object.entries(value && typeof value === 'object' && !Array.isArray(value) ? value : {})) {
     const alias = original.toLowerCase();

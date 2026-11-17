@@ -5,15 +5,37 @@ const {shareAddress}=require('../cloud');
 const {resolvePage}=require('./websites');
 const defaults={MyDrive:'https://pan.quark.cn/',WoGG:'http://woggpan.333232.xyz/',Seedhub:'https://seedog.cc/',S_zps:'https://so.252035.xyz/',YpanSo:'https://www.melost.cn/',BpanSo:'https://www.melost.cn/',KkSs:'http://xiaocge.fun/',UuSs:'http://123.666291.xyz/',Push:'https://pan.quark.cn/'};
 const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-function describe(raw,base){const plugin=/^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1];if(!defaults[plugin])return null;const ext=typeof raw.ext==='object'&&raw.ext||{};return {adapter:'cloud-'+plugin,plugin,api:webUrl(ext.siteUrl||defaults[plugin],base),extension:ext,supported:true,implementation:'node-cloud-'+plugin.toLowerCase(),headers:cleanHeaders({'user-agent':UA,...raw.header,...raw.headers})};}
+function describe(raw,base){
+  const name=/^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1];
+  const drive={PanAli:'ali',PanQuark:'quark',PanUC:'uc',PanBaidu:'baidu'}[name];
+  const plugin=drive?'MyDrive':name==='Wogg'||name==='PanWebShare'?'WoGG':name;
+  if(!defaults[plugin])return null;
+  const ext=typeof raw.ext==='object'&&raw.ext||{};
+  const mirrors=(Array.isArray(ext.site)?ext.site:[]).map(value=>webUrl(value,base)).slice(0,8);
+  return {adapter:'cloud-'+plugin,plugin,driveProvider:drive,panTemplate:name==='PanWebShare',mirrors,api:webUrl(ext.siteUrl||mirrors[0]||defaults[plugin],base),extension:ext,supported:true,implementation:'node-cloud-'+plugin.toLowerCase(),headers:cleanHeaders({'user-agent':UA,...raw.header,...raw.headers})};
+}
 const text=v=>String(v||'').replace(/<[^>]*>/g,'').trim();
 function cards($,base){const output=[];$('.module-item,.module-search-item,.post-item,.movie-item,.movies .item,.card').slice(0,300).each((_,e)=>{const row=$(e),a=row.find('a[title],h2 a,h3 a,a[href*="detail"],a[href*="movie"]').first(),href=a.attr('href');if(!href)return;const title=text(a.attr('title')||row.find('h2,h3,.title').first().text()||a.text()),img=row.find('img').first();if(title)output.push({vod_id:webUrl(href,base),vod_name:title,vod_pic:img.attr('data-src')||img.attr('data-original')||img.attr('src'),vod_remarks:text(row.find('.module-item-note,.note,.state').first().text())});});return [...new Map(output.map(v=>[v.vod_id,v])).values()];}
-async function page(site,url,signal){let r;try{r=await resource(url,{headers:site.headers,signal,timeout:12000});}catch(e){if(!site.browser||!/403/.test(e.message))throw e;r=await site.browser.run(url,{signal});}return {...r,$:cheerio.load(r.text)};}
+async function page(site,url,signal){
+  const candidates=[site.api,...(site.mirrors||[]).filter(value=>value!==site.api)],target=new URL(url),current=new URL(site.api);
+  let last;
+  for(const candidate of candidates){
+    const address=target.origin===current.origin?new URL(target.pathname+target.search,candidate).href:url;
+    const headers={...site.headers,referer:candidate};
+    if(new URL(address).origin!==current.origin){delete headers.cookie;delete headers.authorization;}
+    try{const r=await resource(address,{headers,signal,timeout:6000});
+      if(!/<[a-z][\s\S]*>/i.test(r.text))throw new Error('源站未返回影视页面');
+      site.api=candidate;return {...r,$:cheerio.load(r.text)};
+    }catch(e){signal?.throwIfAborted();last=e;if(e.code==='SOURCE_REGION_BLOCKED')throw e;}
+  }
+  if(site.browser&&/403/.test(last?.message||'')){const r=await site.browser.run(url,{signal});return {...r,$:cheerio.load(r.text)};}
+  throw last;
+}
 function flattened(value){const found=[],walk=(v,depth=0)=>{if(!v||typeof v!=='object'||depth>10||found.length>=500)return;if(Array.isArray(v)){for(const row of v)walk(row,depth+1);return;}const url=v.url||v.link;if(typeof url==='string'&&/https?:\/\/.*(?:quark\.cn|drive\.uc\.cn|alipan\.com|aliyundrive\.com|pan\.baidu\.com)/i.test(url))found.push({vod_id:url,vod_name:text(v.note||v.disk_name||v.title||v.name||'网盘分享'),vod_remarks:text(v.datetime||v.shared_time||v.disk_type)});else for(const row of Object.values(v))walk(row,depth+1);};walk(value);return found;}
 async function list(site,{id='',page:pg=1,keyword='',filters={}}={},signal){
   if(!site.cloud)throw new Error('网盘服务尚未初始化');
   if(site.plugin==='MyDrive'){
-    let provider=id,parent='0';if(id.startsWith('drive:')){const [,p,encoded]=id.split(':'),entry=json(Buffer.from(encoded,'base64url').toString());provider=p;parent=entry.fid;}
+    let provider=site.driveProvider||id,parent='0';if(id.startsWith('drive:')){const [,p,encoded]=id.split(':'),entry=json(Buffer.from(encoded,'base64url').toString());provider=p;parent=entry.fid;}
     return site.cloud.driveList(provider,parent,pg,signal);
   }
   if(site.plugin==='Push'){
@@ -30,7 +52,7 @@ async function list(site,{id='',page:pg=1,keyword='',filters={}}={},signal){
     const result=json((await resource(url.href,{headers:site.headers,signal})).text),items=flattened(result.data||result);
     return {list:items,page:1,pagecount:1,total:items.length};
   }
-  const paths=site.plugin==='Seedhub'?(keyword?'/?s='+encodeURIComponent(keyword):id?'/categories/'+encodeURIComponent(id)+'/movies/?page='+pg:'/'):keyword?'/vodsearch/-------------.html?wd='+encodeURIComponent(keyword)+'&page='+pg:id?'/vodshow/'+encodeURIComponent(id)+'--------'+pg+'---.html':'/';
+  const paths=site.panTemplate?(keyword?'/index.php/vod/search/wd/'+encodeURIComponent(keyword)+'/page/'+pg+'.html':id?'/index.php/vod/show/id/'+encodeURIComponent(filters.cateId||id)+'/page/'+pg+Object.entries(filters).filter(([k,v])=>['class','area','year','by','lang'].includes(k)&&v).map(([k,v])=>'/'+k+'/'+encodeURIComponent(v)).join('')+'.html':'/'):site.plugin==='Seedhub'?(keyword?'/?s='+encodeURIComponent(keyword):id?'/categories/'+encodeURIComponent(id)+'/movies/?page='+pg:'/'):keyword?'/vodsearch/-------------.html?wd='+encodeURIComponent(keyword)+'&page='+pg:id?'/vodshow/'+encodeURIComponent(id)+'--------'+pg+'---.html':'/';
   let sites=[site.api];
   if(['KkSs','UuSs'].includes(site.plugin)&&site.material){const data=await site.material.get(site.plugin,signal);sites=[...new Set([site.api,...data.strings.filter(s=>/^https?:\/\/[^/]+\/$/.test(s))])].slice(0,8);}
   const merged=[];let last;

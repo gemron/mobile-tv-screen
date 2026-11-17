@@ -22,8 +22,8 @@ async function settings(site, signal) {
   if (site.doubanSettings) return site.doubanSettings;
   let template = '', ua = '';
   if (site.material && !site.metadataKey) {
-    const facts = await site.material.get('DouDou', signal);
-    template = facts.strings.find(value => value.includes('frodo.douban.com/api/v2/subject_collection/subject_real_time_hotest/items')) || '';
+    const facts = await site.material.get(site.materialPlugin || 'DouDou', signal);
+    template = facts.strings.find(value => /frodo\.douban\.com\/(?:rexxar\/)?api\/v2\/.+apikey=/.test(value)) || '';
     ua = facts.strings.find(value => value.includes('MicroMessenger')) || '';
   }
   const apiKey = site.metadataKey || (template && new URL(template).searchParams.get('apikey'));

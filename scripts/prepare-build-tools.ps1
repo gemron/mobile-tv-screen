@@ -26,11 +26,11 @@ if (-not (Test-Path -LiteralPath $compiler)) {
 }
 $env:ISCC_PATH = $compiler
 if (-not $SkipFFmpeg) {
-    $archive = Get-VerifiedDownload 'https://github.com/GyanD/codexffmpeg/releases/download/8.0.1/ffmpeg-8.0.1-full_build.zip' 'ffmpeg-8.0.1-full_build.zip' '467CDE100A47ED4B03A897988AEB4A296890C1E2B2D2864204657D002BC5FB90'
-    $ffmpeg = Join-Path $toolsRoot 'ffmpeg-8.0.1-full_build\bin\ffmpeg.exe'
+    $archive = Get-VerifiedDownload 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.7z' 'ffmpeg-8.1.2-essentials_build.7z' 'E25B682664025D49034C981AFB4BAE36238A40F29A3CC1C713AD9A8B5B3528F6'
+    $ffmpeg = Join-Path $toolsRoot 'ffmpeg-8.1.2-essentials_build\bin\ffmpeg.exe'
     if (-not (Test-Path -LiteralPath $ffmpeg)) {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($archive, $toolsRoot)
+        & tar.exe -xf $archive -C $toolsRoot 'ffmpeg-8.1.2-essentials_build/bin' 'ffmpeg-8.1.2-essentials_build/LICENSE' 'ffmpeg-8.1.2-essentials_build/README.txt'
+        if ($LASTEXITCODE -ne 0) { throw 'FFmpeg archive extraction failed.' }
     }
     $env:FFMPEG_PATH = $ffmpeg
     $env:PATH = (Split-Path -Parent $ffmpeg) + ';' + $env:PATH

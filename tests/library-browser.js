@@ -21,6 +21,7 @@ async function run() {
   const header = { 'User-Agent': 'DesktopNative/1.0', Referer: 'https://fixture.test/watch' };
   origin = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://fixture');
+    if (url.pathname === '/poster.png') { assert.equal(req.headers.referer, undefined, 'Poster requests do not inherit a foreign application referrer'); res.setHeader('Content-Type', 'image/png'); res.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jhXcAAAAASUVORK5CYII=', 'base64')); return; }
     if (url.pathname === '/config') {
       const ext = { siteUrl: originBase + '/api', type: 1, categories: ['电影', '剧集'] };
       const encoded = rc4(Buffer.from(JSON.stringify(ext).split('').map(character => String.fromCharCode(character.charCodeAt(0) + 2)).join('')), 'fantaiying921').toString('base64');
@@ -32,7 +33,8 @@ async function run() {
     if (url.pathname === '/api') {
       const video = { vod_id: '1', vod_name: '独立点播测试', vod_remarks: '全 2 集', type_name: '电影', vod_year: '2026', vod_content: '本地合成测试片源，用于验证电脑独立播放。', vod_play_from: '原画线路', vod_play_url: `第 1 集$${originBase}/media/master.m3u8?ep=1#第 2 集$${originBase}/media/master.m3u8?ep=2` };
       video.vod_actor='Fixture Actor / Guest';if(url.searchParams.get('wd')==='rank fixture')video.vod_name='rank fixture extra';
-      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ class: [{ type_id: '1', type_name: '电影' }, { type_id: '2', type_name: '剧集' }], list: [video], page: Number(url.searchParams.get('pg')) || 1, pagecount: 2, total: 2 })); return;
+      video.vod_pic='https://gimg0.baidu.com/gimg/app=2001&fmt=jpeg&src='+encodeURIComponent(originBase+'/poster.png');
+      res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ class: [{ type_id: '1', type_name: '电影' }, { type_id: '2', type_name: '剧集' }], filters: { '1': [{ key: 'year', name: '年份', value: [{ v: '', n: '全部' }, { v: '2026', n: '2026' }] }] }, list: [video], page: Number(url.searchParams.get('pg')) || 1, pagecount: 2, total: 2 })); return;
     }
     if(url.pathname==='/quality'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(url.searchParams.has('play')?{url:['默认',originBase+'/media/master.m3u8?quality=0','备用',originBase+'/media/master.m3u8?quality=1'],parse:0,header}:{class:[],list:[{vod_id:'1',vod_name:'Rendition fixture',vod_play_from:'main',vod_play_url:'One$opaque-id'}]}));return;}
     if(url.pathname==='/web'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(url.searchParams.has('play')?{url:'platform-token',playUrl:originBase+'/web-parse?url=',parse:1,header}:{class:[],list:[{vod_id:'1',vod_name:'Web parser fixture',vod_play_from:'main',vod_play_url:'One$opaque-id'}]}));return;}
@@ -79,6 +81,20 @@ async function run() {
   await browser.click('#libraryResetSearch');await browser.wait('librarySearch.value==="" && libraryResetSearch.hidden && !libraryCategories.hidden');
   await browser.evaluate('librarySite.value="native";librarySite.dispatchEvent(new Event("change"))');await browser.wait('document.querySelectorAll("#libraryCategories button").length===3');
   console.log('PASS: source/search controls retain keywords, explicitly scope results and return to recommendations in one click');
+  await browser.wait('document.querySelector(".vod-artwork img")?.complete && document.querySelector(".vod-artwork img").naturalWidth===1');
+  assert.equal(await browser.evaluate('document.querySelector(".vod-artwork img").src.includes("/poster.png") && !document.querySelector(".vod-artwork img").src.includes("baidu.com") && document.querySelector(".vod-artwork img").referrerPolicy==="no-referrer"'),true,'Baidu-wrapped posters load their original image in the actual library');
+  await browser.evaluate('document.querySelectorAll("#libraryCategories button")[1].click()');
+  await browser.wait('document.querySelector("#libraryFilters select") && !libraryFilters.hidden');
+  await browser.evaluate('document.querySelector("#libraryFilters select").value="2026";document.querySelector("#libraryFilters select").dispatchEvent(new Event("change"))');
+  await browser.wait('libraryPage.textContent==="1 / 2" && libraryStatus.textContent.includes("结果")');
+  await browser.click('#libraryMore');await browser.wait('libraryPage.textContent==="2 / 2"');
+  await browser.evaluate('libraryResults.style.paddingBottom="1000px";scrollTo(0,240);window.returnScroll=scrollY;window.returnCard=document.querySelector(".vod-card");returnCard.focus({preventScroll:true});returnCard.click()');
+  await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false"');
+  await browser.evaluate('document.querySelector(".episode-button").click()');await browser.wait('tvVideo.currentTime>.5 && !tvVideo.paused');
+  await browser.evaluate('btnStopCast.click()');await browser.wait('!document.body.classList.contains("casting-active") && Math.abs(scrollY-returnScroll)<=1');
+  assert.equal(await browser.evaluate('librarySite.value==="native" && libraryPage.textContent==="2 / 2" && document.querySelector("#libraryCategories .active").textContent==="电影" && document.querySelector("#libraryFilters select").value==="2026" && document.querySelector(".vod-card")===returnCard && document.activeElement===returnCard'),true,'Returning preserves the category, filters, page, original results, keyboard focus and scroll');
+  await browser.evaluate('libraryResults.style.paddingBottom="";document.querySelector("#libraryCategories button").click()');await browser.wait('libraryPage.textContent==="1 / 2"');
+  console.log('PASS: return to list keeps the exact category/filter/page and restores the original card and scroll');
   const screenshots = path.resolve('data', 'ui-previews');
   await browser.screenshot(path.join(screenshots, 'native-library-vod.png'));
   const initialDetail=library.detail;let releaseDetail,startedDetail,finishedDetail;
@@ -236,7 +252,9 @@ async function run() {
   await browser.evaluate('recommendation.click()');await browser.wait('libraryMatches.open && Array.from(libraryMatchesResults.querySelectorAll(".vod-card")).some(card=>card.dataset.key.includes("native"))');
   await browser.evaluate('Array.from(libraryMatchesResults.querySelectorAll(".vod-card")).find(card=>card.dataset.key.includes("native")).click()');await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false"');await browser.evaluate('document.querySelector(".episode-button").click()');
   await browser.wait('!libraryDetail.open && !libraryMatches.open && tvVideo.currentTime>.5 && !tvVideo.paused');assert.equal((await fetch(base+'/api/library/playback').then(r=>r.json())).playback.siteKey,'native');assert.equal(await browser.evaluate('librarySite.value==="discovery" && document.querySelector("#libraryResults .vod-card")===recommendation'),true);
-  await browser.evaluate('btnStopCast.click();libraryResults.style.paddingBottom=""');await browser.wait('!document.body.classList.contains("casting-active")');
+  await browser.evaluate('btnStopCast.click()');await browser.wait('!document.body.classList.contains("casting-active") && Math.abs(scrollY-recommendationScroll)<=1');
+  assert.equal(await browser.evaluate('document.activeElement===recommendation && librarySite.value==="discovery" && document.querySelector("#libraryResults .vod-card")===recommendation'),true,'Return from a recommended video retains the recommendation page rather than the playing provider');
+  await browser.evaluate('libraryResults.style.paddingBottom=""');
   const previousSearchCount=pendingSearch.length;await browser.evaluate('librarySearch.value="独立点播测试";document.getElementById("librarySearchForm").requestSubmit()');
   await browser.wait('!document.getElementById("libraryCancelSearch").hidden && document.querySelectorAll(".vod-card").length>0');
   for(let attempt=0;attempt<100&&pendingSearch.length===previousSearchCount;attempt++)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(pendingSearch.length>previousSearchCount);
@@ -252,6 +270,11 @@ async function run() {
   await browser.wait('document.querySelector(".vod-card .vod-match")?.textContent==="演员：Fixture Actor"');
   await browser.screenshot(path.resolve('data/ui-previews/search-actor-match.png'));await browser.evaluate('document.getElementById("libraryCancelSearch").click()');pendingSearch.forEach(value=>value.release());
   console.log('PASS: streamed exact-title priority retains focus and actor-name searches display the matched cast member');
+  await browser.evaluate('libraryResults.style.paddingBottom="1000px";scrollTo(0,230);window.searchReturnScroll=scrollY;window.searchReturnSite=librarySite.value;window.searchReturnCard=Array.from(document.querySelectorAll("#libraryResults .vod-card")).find(card=>card.dataset.key.includes("native"));searchReturnCard.click()');
+  await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false"');await browser.evaluate('document.querySelector(".episode-button").click()');await browser.wait('tvVideo.currentTime>.5 && !tvVideo.paused');
+  await browser.evaluate('btnStopCast.click()');await browser.wait('!document.body.classList.contains("casting-active") && Math.abs(scrollY-searchReturnScroll)<=1');
+  assert.equal(await browser.evaluate('librarySite.value===searchReturnSite && librarySearch.value==="Fixture Actor" && librarySearchAll.checked && libraryCategories.hidden && document.activeElement===searchReturnCard && document.querySelector("#libraryResults .vod-card")===searchReturnCard'),true,'Cross-provider playback retains the submitted search, original browsing source, scope, result nodes and scroll');
+  await browser.evaluate('libraryResults.style.paddingBottom=""');
   await browser.evaluate('document.getElementById("librarySite").value="native";document.getElementById("librarySite").dispatchEvent(new Event("change"))');
   await browser.wait('document.querySelector(".vod-card")?.title==="独立点播测试"');
   assert.ok(await browser.evaluate('document.getElementById("libraryCategories").getBoundingClientRect().bottom < 350'), 'The compact browsing controls leave space for posters');
@@ -281,6 +304,9 @@ async function run() {
   }
   await browser.viewport(1440,1000);await browser.evaluate('selectRate.value="1";selectRate.dispatchEvent(new Event("change"))');
   console.log('PASS: compact single/multiple-episode controls and keyboard speed menu remain inside desktop/tablet/mobile viewports');
+  await browser.evaluate('libraryChooseEpisode.click()');await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false"');
+  await browser.evaluate('document.querySelector(".episode-button").click()');await browser.wait('MobileTVLibraryPlayback()?.index===0 && tvVideo.currentTime>.2 && !tvVideo.paused');
+  await browser.evaluate('btnPlayPause.click()');await browser.wait('tvVideo.paused');
   await browser.click('#playerOptions summary');await browser.wait('playerOptions.open');
   await browser.click('#skipSettings summary');await browser.evaluate('skipIntro.value="2";skipEnding.value="3";skipEnabled.checked=true;skipForm.requestSubmit();libraryAutoNext.checked=true');
   await browser.screenshot(path.resolve('data/ui-previews/player-skip-settings.png'));
@@ -295,13 +321,23 @@ async function run() {
   await browser.evaluate('document.getElementById("btnStopCast").click()');await browser.wait('!document.body.classList.contains("casting-active")');
   await browser.click('[data-library-shelf=history]');await browser.wait('document.querySelectorAll(".collection-card").length>0');
   assert.ok(await browser.evaluate('document.getElementById("libraryCollectionList").textContent.includes("看到")'));
+  await browser.evaluate('libraryCollectionList.style.paddingBottom="1000px";scrollTo(0,210);window.historyReturnScroll=scrollY;window.historyReturnId=document.querySelector(".collection-open").dataset.collectionId;document.querySelector(".collection-open").click()');await browser.wait('tvVideo.currentTime>.5 && !tvVideo.paused');
+  await browser.evaluate('btnStopCast.click()');await browser.wait('!document.body.classList.contains("casting-active") && Math.abs(scrollY-historyReturnScroll)<=1 && document.activeElement?.dataset.collectionId===historyReturnId');
+  assert.equal(await browser.evaluate('document.querySelector("[data-library-shelf=history]").getAttribute("aria-pressed")==="true"'),true,'Resuming history returns to the same shelf and focused entry');
+  await browser.evaluate('libraryCollectionList.style.paddingBottom=""');
   await browser.screenshot(path.resolve('data/ui-previews/library-history.png'));
   await browser.click('[data-library-shelf=favorites]');await browser.wait('document.querySelector(".collection-card strong")?.textContent==="独立点播测试"');
-  await browser.click('.collection-open');await browser.wait('document.getElementById("libraryDetail").open && document.getElementById("libraryDetail").getAttribute("aria-busy")==="false"');await browser.click('.episode-button');await browser.wait('tvVideo.currentTime>0.5 && !tvVideo.paused');await browser.evaluate('document.getElementById("btnStopCast").click()');await browser.wait('!document.body.classList.contains("casting-active")');
+  await browser.evaluate('libraryCollectionList.style.paddingBottom="1000px";scrollTo(0,200);window.collectionScroll=scrollY;window.collectionId=document.querySelector(".collection-open").dataset.collectionId;document.querySelector(".collection-open").click()');await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false"');await browser.click('.episode-button');await browser.wait('tvVideo.currentTime>0.5 && !tvVideo.paused');await browser.evaluate('btnStopCast.click()');await browser.wait('!document.body.classList.contains("casting-active") && Math.abs(scrollY-collectionScroll)<=1 && document.activeElement?.dataset.collectionId===collectionId');
+  assert.equal(await browser.evaluate('document.querySelector("[data-library-shelf=favorites]").getAttribute("aria-pressed")==="true" && !libraryCollection.hidden'),true,'Return from favorites keeps the shelf, focus and scroll even when collection progress refreshes');
+  await browser.evaluate('libraryCollectionList.style.paddingBottom=""');
   await browser.click('#libraryManageSources');await browser.wait('document.getElementById("librarySourcesDialog").open');
   await browser.click('#libraryTitle');await browser.wait('!document.getElementById("librarySourcesDialog").open');
   await browser.click('#libraryManageSources');await browser.evaluate(`document.getElementById('librarySourceName').value='备用订阅';document.getElementById('librarySourceUrl').value=${JSON.stringify(originBase+'/config?second=1')};document.getElementById('librarySourceForm').requestSubmit()`);
   await browser.wait('!document.getElementById("librarySourcesDialog").open && document.getElementById("librarySavedSource").options.length===2');
+  await browser.evaluate('window.returnSourceId=librarySavedSource.value;document.querySelector("[data-library-shelf=favorites]").click()');await browser.wait('document.querySelector(".collection-open")');
+  await browser.click('.collection-open');await browser.wait('libraryDetail.open && libraryDetail.getAttribute("aria-busy")==="false"');await browser.click('.episode-button');await browser.wait('tvVideo.currentTime>.5 && !tvVideo.paused');
+  await browser.evaluate('btnStopCast.click()');await browser.wait('!document.body.classList.contains("casting-active") && librarySavedSource.value===returnSourceId && !libraryView.inert && document.querySelector("[data-library-shelf=favorites]").getAttribute("aria-pressed")==="true"');
+  assert.equal((await fetch(base+'/api/library/config').then(response=>response.json())).sourceId,await browser.evaluate('returnSourceId'),'Return restores the original subscription after playing a favorite from another subscription');
   await browser.click('#libraryManageSources');await browser.wait('document.querySelectorAll(".saved-source").length===2');await browser.screenshot(path.resolve('data/ui-previews/library-source-manager.png'));await browser.click('#libraryCloseSources');
   await browser.evaluate('document.getElementById("librarySavedSource").selectedIndex=0;document.getElementById("librarySavedSource").dispatchEvent(new Event("change"))');await browser.wait('!document.getElementById("librarySavedSource").disabled && document.getElementById("librarySavedSource").selectedIndex===0');
   await browser.click('[data-library-nav=live]');await browser.wait('document.querySelectorAll(".live-channel").length===2');await browser.click('.live-favorite');await browser.wait('document.querySelector(".live-favorite").getAttribute("aria-pressed")==="true"');
@@ -318,6 +354,10 @@ async function run() {
   library.home = async () => { throw Object.assign(new Error('请先打开站点浏览器完成验证或登录，再重试'), { verifyUrl: 'https://fixture.test/verify' }); }; library.browser.open = async url => { verifiedUrl=url;return { opened:true }; };
   await browser.click('[data-library-nav=vod]');await browser.wait('!document.getElementById("libraryVerify").hidden');await browser.click('#libraryVerify');await browser.wait('document.getElementById("toast").textContent.includes("完成验证或登录后")');assert.equal(verifiedUrl, 'https://fixture.test/verify');assert.equal(await browser.evaluate('document.getElementById("libraryVerifyRetry").hidden'), false);
   library.home = originalHome;library.browser.open = originalOpen;
+  library.home=async()=>{throw Object.assign(new Error('此站点限制当前网络所在地区访问，请切换其他片源。'),{status:403,code:'SOURCE_REGION_BLOCKED'});};
+  await browser.click('#libraryRetry');await browser.wait('libraryStatus.textContent.includes("所在地区") && libraryVerify.hidden');
+  assert.equal(await browser.evaluate('libraryResults.textContent.includes("当前地区无法访问") && !libraryResults.textContent.includes("暂时没有响应")'),true,'Region restrictions clear stale verification actions and show the actual access limitation');
+  library.home=originalHome;
   const schedules = require('../src/content/schedule'), formatDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai'}),day = formatDay.format(Date.now()),tomorrow=formatDay.format(Date.now()+86400000);
   library.home = async () => ({ classes: [], list: schedules.sortEvents([{ id:'fixture-live', title:'Home VS Away', schedule:schedules.schedule({date:day,time:'12:00',status:'live',league:'League'}) },{ id:'fixture-finished',title:'Finished match',schedule:schedules.schedule({date:day,time:'09:00',status:'finished'}) },{ id:'fixture-soon',title:'Upcoming match',schedule:schedules.schedule({date:tomorrow,time:'18:00',status:'upcoming'}) }]), page:1,pageCount:1 });
   await browser.click('#libraryRetry');await browser.wait('document.querySelectorAll(".schedule-match").length===3');assert.equal(await browser.evaluate('document.querySelector(".schedule-status").textContent'), '直播中');
@@ -325,6 +365,13 @@ async function run() {
   await browser.evaluate('document.getElementById("libraryMatchStatus").value="upcoming";document.getElementById("libraryMatchStatus").dispatchEvent(new Event("change"))');await browser.wait('document.querySelectorAll(".schedule-match").length===1');assert.ok(await browser.evaluate('document.querySelector(".schedule-match").textContent.includes("Upcoming match")'));
   library.home = originalHome;
   console.log('PASS: compact header, persistent source switching, favorites/history, buffer track, outside-click dismissal, TV channel drawer/number tuning and verification actions');
+  await browser.click('[data-library-nav=live]');await browser.wait('document.querySelector(".live-channel")');
+  await browser.evaluate('if(libraryLiveFavorites.classList.contains("active"))libraryLiveFavorites.click();libraryLiveGroup.value="新闻";libraryLiveGroup.dispatchEvent(new Event("change"));libraryLiveSearch.value="测试";libraryLiveSearch.dispatchEvent(new Event("input"));libraryChannelList.style.paddingBottom="1000px";scrollTo(0,220);window.liveReturnScroll=scrollY;window.liveReturnSource=libraryLiveSource.value;window.liveReturnButton=document.querySelector(".live-channel");liveReturnButton.click()');
+  await browser.wait('MobileTVPlayerState()?.protocol==="Live" && tvVideo.currentTime>.5 && !tvVideo.paused');await browser.evaluate('btnStopCast.click()');
+  await browser.wait('!document.body.classList.contains("casting-active") && Math.abs(scrollY-liveReturnScroll)<=1');
+  assert.equal(await browser.evaluate('libraryLiveSource.value===liveReturnSource && libraryLiveGroup.value==="新闻" && libraryLiveSearch.value==="测试" && document.activeElement===liveReturnButton && !libraryLive.hidden'),true,'Return from live playback retains source, channel group, query, keyboard focus and scroll');
+  await browser.evaluate('libraryChannelList.style.paddingBottom=""');
+  console.log('PASS: return-to-list preserves recommendations, cross-provider searches, category filters/pages, history/favorites, subscriptions and live browsing state');
   if (process.argv.includes('--real-source') || process.argv.includes('--real-live')) {
     await browser.evaluate('document.getElementById("btnStopCast").click()');
     await browser.wait('!document.body.classList.contains("casting-active")');

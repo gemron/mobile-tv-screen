@@ -3,8 +3,10 @@ const {resource,postResource}=require('../http');
 const {json,webUrl,cleanHeaders}=require('../format');
 const hash=(type,text)=>crypto.createHash(type).update(text).digest('hex');
 function describe(raw,base){
-  const plugin=/^csp_(Appgz|Hmys)(?:Guard)?$/.exec(raw.api)?.[1];if(!plugin)return null;
+  const name=/^csp_(Appgz|Gz360|Hmys)(?:Guard)?$/.exec(raw.api)?.[1];if(!name)return null;
+  const plugin=name==='Gz360'?'Appgz':name;
   const ext=typeof raw.ext==='object'&&raw.ext||{};
+  if(name==='Gz360')return {adapter:'appgz',materialPlugin:'Gz360',api:webUrl(ext.siteUrl||'https://api.h27sq4f.com/',base),extension:ext,supported:true,implementation:'node-gz360',headers:cleanHeaders(raw.header||raw.headers),deviceId:crypto.randomUUID().replace(/-/g,'')};
   return {adapter:plugin==='Hmys'?'hmys':'appgz',api:webUrl(ext.siteUrl||(plugin==='Hmys'?'https://u.gslock.com/':'http://api.nstpsw.com/'),base),extension:ext,supported:true,implementation:'node-'+plugin.toLowerCase(),headers:cleanHeaders(raw.header||raw.headers),deviceId:crypto.randomUUID().replace(/-/g,'')};
 }
 function aes(data,key,iv,encrypt=false){
@@ -18,7 +20,16 @@ function rsaDecode(encoded,keyData){
   if(input.length%width)throw new Error('站点密钥响应格式错误');
   for(let p=0;p<input.length;p+=width){const block=crypto.privateDecrypt({key,padding:crypto.constants.RSA_NO_PADDING},input.subarray(p,p+width));const end=block.indexOf(0,2);if(block[0]!==0||block[1]!==2||end<10)throw new Error('站点密钥响应校验失败');parts.push(block.subarray(end+1));}return Buffer.concat(parts).toString('utf8');
 }
-async function facts(site,signal){if(!site.material)throw new Error('该源需要订阅声明的插件配置数据');return site.material.get(site.adapter==='hmys'?'Hmys':'Appgz',signal);}
+async function facts(site,signal){
+  if(!site.material)throw new Error('该源需要订阅声明的插件配置数据');
+  const data=await site.material.get(site.materialPlugin||(site.adapter==='hmys'?'Hmys':'Appgz'),signal);
+  if(site.materialPlugin==='Gz360'){
+    const strip=s=>(s||'').replace(/-----[^-]+-----|\s/g,'');
+    data.fields.N=strip(data.strings.find(s=>s.startsWith('-----BEGIN PUBLIC KEY-----')));
+    data.fields.SN=strip(data.strings.find(s=>s.startsWith('-----BEGIN RSA PRIVATE KEY-----')));
+  }
+  return data;
+}
 async function appgzCall(site,path,body,signal,token=site.appToken||''){
   const material=await facts(site,signal),fields=material.fields;
   if(!fields.N||!fields.SN)throw new Error('未识别到瓜子接口加密参数，请更新订阅');
@@ -27,6 +38,7 @@ async function appgzCall(site,path,body,signal,token=site.appToken||''){
   const signature=hash('md5',`token_id=,token=${token},phone_type=1,request_key=${request_key},app_id=1,time=${time},keys=${keys}*&zvdvdvddbfikkkumtmdwqppp?|4Y!s!2br`).toUpperCase();
   const payload={token,token_id:'',phone_type:'1',time,phone_model:'oneplus-hd1900',keys,request_key,signature,app_id:'1',ad_version:'1'};
   const headers={'user-agent':'okhttp/3.12.0',version:'2603002',ver:'3.0.4.0','api-ver':'1',packagename:'com.r3ac892153.q1ed27199a.wf930fc6bf20260401',code:'GZ0001',referer:site.api,...site.headers};
+  if(site.materialPlugin==='Gz360')Object.assign(headers,{version:'2606029',ver:'3.0.4.8',packagename:material.strings.find(s=>/^com\.[a-z0-9]+\.[a-z0-9]+\.[a-z0-9]+$/i.test(s))||'',code:material.strings.find(s=>/^GZ\d+$/.test(s))||''});
   const response=json((await postResource(webUrl(path,site.api),new URLSearchParams(payload).toString(),{headers,signal,contentType:'application/x-www-form-urlencoded'})).text);
   if(!response.data?.keys){if(response.code&&![0,1,200].includes(Number(response.code)))throw new Error(response.msg||response.message||'瓜子接口拒绝请求');return response.data||response;}
   const envelope=json(rsaDecode(response.data.keys,fields.SN)),cipher=String(response.data.response_key||'').replace(/\\/g,'');
@@ -52,7 +64,7 @@ async function initialize(site,signal){
       const deviceKey=saved.deviceKey || crypto.randomBytes(18).toString('base64');
       site.runtime?.set({deviceKey});
       if(saved.token){site.initialized=true;return;}
-      const response=await appgzCall(site,'/App/Authentication/Device/signUp',{old_key:site.deviceId.slice(0,16),new_key:deviceKey,phone_type:1,code:''},signal,'');
+      const response=await appgzCall(site,'/App/Authentication/Device/signUp',{old_key:site.deviceId.slice(0,16),new_key:deviceKey,phone_type:1,code:'',recommend_id:''},signal,'');
       site.appToken=response.token||response.data?.token||'';
     }
     site.runtime?.set({token:site.appToken});site.initialized=true;
@@ -79,7 +91,7 @@ async function detail(site,id,signal){
   }
   const data=await appgzCall(site,'/App/IndexPlay/playInfo',{vod_id:id,token_id:'',token:site.appToken,mobile_time:String(Math.floor(Date.now()/1000))},signal),item=data.vodInfo||data,lines=[];
   const groups=await appgzCall(site,'/App/Resource/Vurl/show',{vurl_cloud_id:'2',vod_d_id:id},signal);
-  for(const quality of ['1080','720','480']){
+  for(const quality of site.materialPlugin==='Gz360'?['3840','2160','1080','720','480','360','240']:['1080','720','480']){
     const episodes=[];
     for(const item of groups.list||[]){
       if(String(item.pay_playable)==='0')continue;

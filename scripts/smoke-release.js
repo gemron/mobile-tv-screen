@@ -58,6 +58,13 @@ async function main() {
   console.log(`PASS: ${compared} shipped source, asset and documentation files match the release checkout`);
   assert.equal(execFileSync(path.join(release, 'runtime', 'node.exe'), ['--version'], { encoding: 'utf8', windowsHide: true }).trim(), latest.node);
   assert.match(execFileSync(path.join(release, 'tools', 'ffmpeg.exe'), ['-version'], { encoding: 'utf8', windowsHide: true }), /ffmpeg version/);
+  const ffmpeg=path.join(release,'tools','ffmpeg.exe'), ffOptions={encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']};
+  const decoders=execFileSync(ffmpeg,['-hide_banner','-decoders'],ffOptions),encoders=execFileSync(ffmpeg,['-hide_banner','-encoders'],ffOptions),filters=execFileSync(ffmpeg,['-hide_banner','-filters'],ffOptions);
+  for(const codec of ['h264','hevc','aac','ac3','dca','subrip','ass'])assert.match(decoders,new RegExp('\\b'+codec+'\\b'),'Bundled decoder '+codec);
+  for(const codec of ['aac','libx264'])assert.match(encoders,new RegExp('\\b'+codec+'\\b'),'Bundled encoder '+codec);
+  assert.match(filters,/\bsubtitles\b/,'Subtitle rendering remains available');
+  execFileSync(path.join(release,'runtime','node.exe'),['--input-type=module','-e',"const [{default:Torrent},{default:Store}]=await Promise.all([import('webtorrent'),import('fs-chunk-store')]);if(typeof Store!=='function')throw Error('Missing disk store');const c=new Torrent({dht:false,tracker:false,lsd:false,utp:false});await new Promise((r,j)=>c.destroy(e=>e?j(e):r()));"],{cwd:path.join(release,'app'),env:{...process.env,NODE_PATH:''},windowsHide:true,stdio:['ignore','pipe','pipe'],timeout:15000});
+  console.log('PASS: slim media tools retain video/audio/subtitle codecs and staged torrent dependencies initialize offline');
   port = await new Promise(resolve => { const probe = net.createServer(); probe.listen(0, '127.0.0.1', () => { const free = probe.address().port; probe.close(() => resolve(free)); }); });
   const executable = path.join(release, 'MobileTV.exe');
   const data = path.join(sandbox, 'isolated user data');
