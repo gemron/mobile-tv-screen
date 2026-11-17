@@ -111,6 +111,7 @@ async function resolve(site, episode, signal) {
     data.url = parsed.url;
   }
   if (!data.url) throw new Error('App 未返回播放地址');
+  if (/\.(mkv|webm|mov|avi|m4v|ts|aac|ogg|wav)(?:[?#]|$)/i.test(data.url)) return { url:webUrl(data.url,site.api), parse:0, header:site.headers };
   return resolvePage(site,webUrl(data.url,site.api),signal);
 }
 module.exports = { describe, list, detail, resolve, aes, decode99 };

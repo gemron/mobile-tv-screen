@@ -60,6 +60,7 @@ async function run(){
     const app=site({api:'csp_AppGet',ext:{url:base,dataKey:key,dataIv:key,version:'119'}});
     assert.equal((await catalog.home(app)).list[0].title,'App 影片');const detail=await catalog.detail(app,'7');
     const result=await require('../src/content/providers').resolve(app,detail.lines[0].episodes[0]);assert.equal(result.url,base+'/movie.mp4');
+    const mkv='xs-app:'+Buffer.from(JSON.stringify({url:'https://fixture.invalid/original.mkv'})).toString('base64url');assert.equal((await require('../src/content/providers').resolve(app,{id:mkv})).url,'https://fixture.invalid/original.mkv','Original MKV links go to the player without downloading them as HTML');
     const jq=site({api:'csp_App99',ext:{host:base,name:'Fixture',versionName:'2',buildSignature:'fixture',buildNumber:'1',package:'example.fixture'}});
     assert.equal((await catalog.home(jq)).list[0].title,'剧圈影片');assert.equal((await catalog.detail(jq,'7')).lines[0].episodes[0].name,'第一集');
     const drama=site({api:'csp_AppDrama',ext:{host:base,publicKey,dataKey:key,dataIv:key,version:'3.0.1',pkg:'fixture',appName:'fixture'}});drama.material={get:async()=>({fields:{c:key}})};
