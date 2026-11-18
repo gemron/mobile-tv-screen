@@ -85,6 +85,7 @@
   let requestedStreamMode = 'auto';
   let activeAudioTrack = null, activeBurnSubtitle = null;
   let remuxRequestId = '', remuxRequestSerial = 0, preparedRanges = [];
+  let remuxPlayer = null, nativeRemuxOnly = false;
   let transcodeBase = 0;
   let streamDuration = 0;
   let hlsRecoveryTimer = null;
@@ -125,11 +126,14 @@
     const video = els.tvVideo;
     if (activeStreamMode === 'transcode') {
       const relative = target - transcodeBase;
-      let buffered = false;
-      for (let i = 0; i < (video.buffered?.length || 0); i++) {
-        if (relative >= video.buffered.start(i) && relative < video.buffered.end(i)) buffered = true;
-      }
-      if (!buffered) {
+      const containsTarget = ranges => {
+        for (let i = 0; i < ranges.length; i++) {
+          if (relative >= ranges.start(i) && relative < ranges.end(i)) return true;
+        }
+        return false;
+      };
+      if (!containsTarget(video.buffered) || (video.seekable && !containsTarget(video.seekable))) {
+        if (remuxPlayer?.seekPrepared(relative, preparedRanges, transcodeBase)) return;
         pendingStartPos = 0;
         attachVideoOrAudioStream(activeUrl, 'transcode', target);
         return;
@@ -229,12 +233,16 @@
     }
   }
 
-  function resolvePlaybackUrl(rawUrl, mode) {
+  function resolvePlaybackUrl(rawUrl, mode, start = 0) {
     if (!rawUrl || rawUrl.startsWith('webrtc://')) return rawUrl;
     if(isServerRemux(rawUrl))return rawUrl;
     let upstreamUrl = rawUrl;
     try {
-      upstreamUrl = new URL(rawUrl, location.href).href;
+      const input = new URL(rawUrl, location.href);
+      if (mode === 'transcode' && start > 0 && input.origin === location.origin && input.pathname === '/api/proxy') {
+        input.searchParams.set('seekRead', '1');
+      }
+      upstreamUrl = input.href;
     } catch {}
     if (mode === 'transcode') {
       return `/api/transcode?url=${encodeURIComponent(upstreamUrl)}`;
@@ -253,9 +261,10 @@
   function isServerRemux(url){try{const value=new URL(url,location.href);return value.origin===location.origin&&value.pathname==='/api/transcode';}catch{return false;}}
 
   function destroyMediaEngines() {
+    remuxPlayer?.destroy();
+    remuxPlayer = null;
     preparedRanges=[];remuxRequestId='';
     els.seekBuffered.style.background = 'none'; els.seekPlayed.style.width = '0%';
-    if (els.metricBuffer) els.metricBuffer.hidden = true;
     if (els.metricRemux) els.metricRemux.hidden = true;
     if (originalBufferTimer !== null) clearTimeout(originalBufferTimer);
     originalBufferTimer = null;
@@ -342,7 +351,7 @@
     if(isServerRemux(rawUrl)){mode='transcode';activeStreamMode='transcode';}
     transcodeBase = mode === 'transcode' ? Math.max(0, resumePosition) : 0;
     window.MobileTVSubtitles?.setTimeline(transcodeBase);
-    let resolvedUrl = resolvePlaybackUrl(rawUrl, mode);
+    let resolvedUrl = resolvePlaybackUrl(rawUrl, mode, transcodeBase);
     if(mode==='transcode'){remuxRequestId=(window.crypto?.randomUUID?.()||'mt_'+Date.now().toString(36))+'_'+(++remuxRequestSerial);const value=new URL(resolvedUrl,location.href);value.searchParams.set('requestId',remuxRequestId);resolvedUrl=value.pathname+value.search;}
     if(mode==='transcode'&&(currentState?.audioTrack!=null||currentState?.burnSubtitle!=null)){const value=new URL(resolvedUrl,location.href);if(currentState.audioTrack!=null)value.searchParams.set('audioTrack',currentState.audioTrack);if(currentState.burnSubtitle!=null)value.searchParams.set('burnSubtitle',currentState.burnSubtitle);resolvedUrl=value.pathname+value.search;}
     if (transcodeBase > 0) {const value=new URL(resolvedUrl,location.href);value.searchParams.set('start',String(transcodeBase));resolvedUrl=value.pathname+value.search;}
@@ -446,7 +455,10 @@
       return;
     }
 
-    video.src = resolvedUrl;
+    if (mode === 'transcode' && !currentState?.metadata?.isLive && !nativeRemuxOnly && window.MobileTVRemuxPlayer
+        && (/matroska/i.test(mime) || /\.mkv(?:$|[?&])/i.test(rawUrl))) {
+      remuxPlayer = window.MobileTVRemuxPlayer.open(video, resolvedUrl, streamDuration - transcodeBase, retryNativeRemux);
+    } else video.src = resolvedUrl;
     video.load();
     if (currentState?.status === 'PLAYING') {
       startNativePlayback(video);
@@ -477,6 +489,11 @@
     els.bufferingPill.textContent = '流媒体加载失败，可尝试切换传输模式或重新投屏';
   }
 
+  function retryNativeRemux() {
+    nativeRemuxOnly = true;
+    attachVideoOrAudioStream(activeUrl, 'transcode', playbackPosition());
+  }
+
   function applyState(snap) {
     const prev = currentState;
     currentState = snap;
@@ -493,6 +510,7 @@
     els.playerStage.classList.toggle('is-live', Boolean(isActive && snap.metadata?.isLive));
 
     if (!isActive) {
+      els.metricBuffer.hidden = true;
       destroyMediaEngines();
       closePeerConnection();
       activeSessionId = -1;
@@ -519,9 +537,11 @@
     els.tvVideo.playbackRate = snap.playbackRate || 1;
 
     const mediaChanged = snap.sessionId !== activeSessionId || snap.url !== activeUrl;
+    if (mediaChanged) els.metricBuffer.hidden = true;
     if(!mediaChanged&&Number(snap.metadata?.duration)>0){streamDuration=Number(snap.metadata.duration);els.seekSlider.max=streamDuration;els.lblDuration.textContent=formatSec(streamDuration);}
     const sessionChanged = mediaChanged || (snap.streamMode || 'auto') !== requestedStreamMode || (snap.audioTrack??null)!==activeAudioTrack || (snap.burnSubtitle??null)!==activeBurnSubtitle;
     if (sessionChanged) {
+      nativeRemuxOnly = false;
       const joiningPlayback = !prev && Number(snap.position) > 1 && Number(snap.duration) > 0 && !snap.metadata?.isLive;
       const queuedPosition = pendingStartPos > 0 ? pendingStartUnit !== 'seconds' && pendingStartPos <= 1 && playbackDuration() > 1 ? pendingStartPos * playbackDuration() : pendingStartPos : playbackPosition();
       const position = mediaChanged ? joiningPlayback ? Number(snap.position) : Number(snap.startPosition) || 0 : queuedPosition;
@@ -772,7 +792,9 @@
         const remux = msg.data.remuxBuffer;
         const stream=remux?.buffers?.find(item=>item.requestId===remuxRequestId);
         if(stream&&Math.abs(Number(stream.start)-transcodeBase)<.01)preparedRanges=(stream.ranges||[]).filter(r=>Array.isArray(r)&&r.length===2&&Number.isFinite(r[0])&&Number.isFinite(r[1])&&r[1]>r[0]).map(([a,b])=>[a+transcodeBase,b+transcodeBase]);
-        else preparedRanges=[];
+        // A finished producer leaves the server stats before the browser
+        // finishes appending its response. These ranges belong to this reader.
+        else if (!remuxPlayer) preparedRanges=[];
         updateSeekBuffer();
         if (els.metricRemux) {
           els.metricRemux.hidden = !stream || activeStreamMode!=='transcode';
@@ -920,7 +942,7 @@
     }
     for(const [start,end]of preparedRanges){const left=percent(Math.max(start,playbackPosition())),right=percent(end);if(right>left)gradients.push(`linear-gradient(to right, transparent ${left}%, #557e78 ${left}%, #557e78 ${right}%, transparent ${right}%)`);}
     const background = gradients.join(',') || 'none'; if (els.seekBuffered.style.background !== background) els.seekBuffered.style.background = background;
-    els.seekPlayed.style.width = percent(isUserSeeking ? Number(els.seekSlider.value) : playbackPosition()) + '%';
+    els.seekPlayed.style.width = percent(playbackPosition()) + '%';
     const local=playableAhead();
     els.seekTrack.title = `本机可连续播放约 ${Math.floor(local)} 秒（播放器内 ${ahead.toFixed(1)} 秒）· 浅灰为播放器缓冲，灰绿色为已完成预读，绿色为已播放；跳转可能需要重新准备画面`;
   }
@@ -941,6 +963,7 @@
   });
 
   els.tvVideo.addEventListener('error', () => {
+    if (remuxPlayer && els.tvVideo.error) { retryNativeRemux(); return; }
     if (activeUrl && !hlsPlayer && !mpegtsPlayer) handlePlaybackFailure(activeUrl);
   });
 
@@ -1152,6 +1175,11 @@
 
   els.playerStage.addEventListener('mousemove', wakeHud);
   els.playerStage.addEventListener('touchstart', wakeHud, { passive: true });
+  els.playerStage.addEventListener('click', (event) => {
+    if (event.detail > 0 && event.target.closest('#seekSlider, #btnRewind15, #btnForward15')) {
+      els.playerStage.focus({ preventScroll: true });
+    }
+  });
   els.mediaViewport.addEventListener('click', (event) => {
     if (event.target !== els.bufferingPill) els.playerStage.focus({ preventScroll: true });
   });

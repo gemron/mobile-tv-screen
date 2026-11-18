@@ -223,6 +223,9 @@ body.casting-active .topbar, body.casting-active #standbyView { display: none; }
 .seek-track .seek-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 13px; height: 13px; margin-top: -4.5px; background: #78ddc2; border: 0; border-radius: 50%; box-shadow: 0 0 0 2px #071d1733; }
 .seek-track .seek-slider::-moz-range-track { height: 4px; background: transparent; border: 0; }
 .seek-track .seek-slider::-moz-range-thumb { width: 13px; height: 13px; background: #78ddc2; border: 0; border-radius: 50%; }
+.seek-track .seek-slider:focus-visible { outline: none; }
+.seek-slider:focus-visible::-webkit-slider-thumb { outline: 2px solid white; outline-offset: 2px; }
+.seek-slider:focus-visible::-moz-range-thumb { outline: 2px solid white; outline-offset: 2px; }
 .player-stage.is-live :is(#seekRow, #btnRewind15, #btnForward15, #selectRate, #playerRate) { display: none; }
 .controls-row { display: flex; justify-content: space-between; align-items: center; gap: 15px; }
 .controls-group { display: flex; align-items: center; gap: 7px; }

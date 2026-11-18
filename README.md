@@ -13,7 +13,7 @@
 
 [下载安装包](https://github.com/gemron/mobile-tv-screen/releases/latest) · [使用指南](#快速开始) · [常见问题](#常见问题) · [参与开发](CONTRIBUTING.md) · [反馈问题](https://github.com/gemron/mobile-tv-screen/issues)
 
-当前版本 [1.3.0](https://github.com/gemron/mobile-tv-screen/releases/tag/v1.3.0)（2026-11-18）：扩展 XS 订阅片源支持，修复拖动后的缓存复用与海报加载，保留返回列表前的页面状态，并缩小 Windows 发行包。提供安装版、便携版与 SHA-256 校验文件；[更新日志](CHANGELOG.md)及[兼容清单](docs/SOURCE_COMPATIBILITY.md)记录实测范围和源站限制。
+当前版本 [1.4.0](https://github.com/gemron/mobile-tv-screen/releases/tag/v1.4.0)（2026-11-19）使用 Electron 桌面播放器，沿用已有订阅、收藏和账号，改进 MKV 拖动时的缓存复用。提供 Windows 安装包、便携包及 SHA-256 校验文件。
 
 </div>
 
@@ -49,7 +49,7 @@ MobileTV 在电脑上接收手机视频 App 的投屏请求，也能导入自己
 - **实用播放器**：全屏、倍速、静音、旋转、适应/填充/拉伸、截图、浏览器支持时的画中画，以及实际解码分辨率、FPS、缓冲秒数显示。进度条用浅色标记已缓冲区间；设置面板点击外部自动收起。
 - **连续的浏览与播放界面**：片源与搜索合并为连续工具栏，搜索范围明确，切换片源保留关键词；紧凑选集和键盘倍速菜单适配小窗口。赛事列表、详情显示源站提供的队标与队名，直播线路预检失败时可直接换线或刷新。
 - **片头片尾**：播放设置中填写要跳过的片头、片尾秒数，勾选“自动跳过”并保存。同一剧集换集后沿用，在本机记忆；片尾有下一集且启用连播时进入下一集，否则暂停。直播不触发，手动回看片头不会重复跳转，填 0 可取消对应跳过。
-- **高分辨率播放**：桌面窗口优先使用已安装的 Chrome，未安装时回退 Edge；保留原视频码流，并在重新打开窗口时恢复当前点播进度。设置中显示实际呈现帧率、最近丢帧率和缓冲秒数。
+- **桌面播放**：Electron 窗口使用内置 Chromium 播放视频，设置中可以查看呈现帧率、丢帧率和缓冲秒数。
 - **键盘优先**：空格播放暂停、方向键快进快退和调节音量；输入框、原生控件和弹窗保留各自的键盘行为。
 - **缓冲与恢复**：HLS 点播目标前向缓冲 60 秒、最多约 90 秒，配有 64 MiB 分片缓存；夸克原文件按实际分辨率自动调整 32～512 MiB 内存缓存，以小分段并发读取并向播放器连续供流。兼容封装另有 64 MiB 成品数据预读，分别显示三层缓冲。支持重复请求合并、短时网络重试和播放进度恢复。
 - **音轨和字幕**：可选择内置音轨及文字字幕，AC-3／DTS 等音频可转换为 AAC 立体声并保留视频画质；支持片源字幕、Assrt／迅雷搜索、本地字幕和链接，兼容 SRT／VTT／ASS／SSA 与 ZIP，提供延迟和字号设置。优先使用本机／订阅 `assrt` Token，没有时使用免费搜索；图像字幕须明确启用兼容转码，见[使用说明](docs/SUBTITLES.md)。
@@ -78,7 +78,7 @@ MobileTV 在电脑上接收手机视频 App 的投屏请求，也能导入自己
 
 下载同一 Release 中的 `MobileTV-<版本>-win-x64-<构建时间>.zip`，**完整解压**，双击 `MobileTV.exe`。
 
-请保留 EXE 旁边的 `app`、`runtime` 和 `tools` 文件夹。便携包无需安装，但运行数据仍保存在用户目录，方便升级时保留配置。
+请完整解压 ZIP 后运行 MobileTV.exe。Electron 资源、接收服务与媒体工具随包分发，用户数据保存在用户目录，升级时沿用。
 
 ### 手机网页投屏
 
@@ -147,7 +147,7 @@ MKV 自动采用 FFmpeg 兼容封装，直接复制视频码流，音频转换�
 
 兼容封装保留 MP4 的音视频时间轴编辑信息，避免拖动后因视频关键帧预解码与音频裁剪起点不同而出现声音提前。合流 HEVC/EAC3 和音视频分离的 DASH 均有真实闪光／提示音对照测试。
 
-本机对同一段 3840×1608、24 FPS HEVC 做本地文件对照：Edge 的平台解码路径在 15 秒内丢约 79 帧，Chrome 的 D3D11 硬件解码路径为 0 丢帧，两者均无缓冲中断。因此桌面播放器优先使用已安装的 Chrome；不下载浏览器，也不转换视频编码。该结果只代表这台电脑和样本，其他显卡、驱动及片源需分别验证。需要优先使用 Edge 时，可设置环境变量 `MOBILETV_PLAYER_BROWSER=edge` 后重新启动程序。
+桌面播放器使用随版本分发的 Chromium。HEVC 硬件解码取决于显卡、驱动、视频编码及系统支持。
 
 ### 缓存策略
 
@@ -221,11 +221,11 @@ Windows 发行版默认使用 `%LOCALAPPDATA%\MobileTV\data`：
 | `uploads/` | 上传文件；每次上传完成后清理到最近 12 个文件，单文件上限 2 GiB |
 | `sample-test.mp4` | 按需生成的本地诊断视频 |
 | `logs/` | Windows 启动器的运行日志 |
-| `browser/` | 桌面接收窗口使用的独立浏览器配置 |
-| `browser-chrome/` | Chrome 桌面播放窗口的独立配置，与 Edge 配置分开保存 |
+| `electron/<端口>/` | Electron 窗口配置、网页存储及缓存 |
+| `browser/`、`browser-chrome/` | 旧版播放窗口的配置。窗口内的本地偏好在 Electron 中单独保存 |
 | 播放历史、状态和分片缓存 | 进程内存中保存，接收服务重启后清空 |
 
-源码启动默认使用项目根目录下的 `data/`。可以通过 `MOBILETV_DATA_DIR` 指定独立目录。公开仓库和发行包不包含开发电脑的设备配置、上传文件和日志。
+Electron 源码启动与 Windows 发行版共用上述用户目录。直接运行 Node 接收服务时默认使用项目下的 `data/`。两种方式都支持 `MOBILETV_DATA_DIR`。
 
 ### 环境变量和启动参数
 
@@ -236,7 +236,6 @@ Windows 发行版默认使用 `%LOCALAPPDATA%\MobileTV\data`：
 | `TVBOX_PORT` | `9978` | 影视兼容端口 |
 | `MOBILETV_DATA_DIR` | 见上文 | 配置、上传与日志数据目录 |
 | `NO_OPEN=1` | 未设置 | 源码运行时不自动打开浏览器 |
-| `MOBILETV_PLAYER_BROWSER` | Chrome 优先 | Windows 桌面窗口设为 `edge` 时优先使用 Edge，未找到时仍回退可用浏览器 |
 | `DISABLE_DLNA=1` | 未设置 | 禁用 DLNA 发现与接收服务 |
 | `DISABLE_AIRPLAY=1` | 未设置 | 禁用基础 AirPlay 服务 |
 | `DISABLE_TVBOX=1` | 未设置 | 禁用影视兼容服务 |
@@ -250,7 +249,7 @@ Windows 启动器参数：
 .\MobileTV.exe --quit --port 8080
 ```
 
-启动器通过 `--port` 选择主端口，未指定时使用 8080；修改 `PORT` 环境变量主要适用于直接运行 Node.js 源码。影视 App 的默认端口探测逻辑可能固定，修改 9978 前请确认发送端支持。
+桌面程序优先使用 `--port`，其次使用 `PORT`，默认 8080。影视 App 的默认端口探测逻辑可能固定，修改 9978 前请确认发送端支持。
 
 ## 从源码运行
 
@@ -263,12 +262,12 @@ npm ci
 npm start
 ```
 
-打开 `http://127.0.0.1:8080/`。开发时可以使用 `npm run dev`。如果无需 AirPlay 或影视接收，可设置对应禁用变量后启动。
+`npm start` 打开 Electron 窗口。仅运行接收服务时可使用 `npm run start:server`，或 `npm run dev` 监听服务代码更改。设置 `NO_OPEN=1` 可让独立服务在后台启动。
 
 ```powershell
 $env:NO_OPEN = '1'
 $env:MOBILETV_DATA_DIR = 'D:\MobileTV-data'
-npm start
+npm run start:server
 ```
 
 ## 构建与验证
@@ -327,7 +326,8 @@ src/
   services/             播放状态、媒体代理、分片缓存
   utils/                网卡选择、设备标识、数据目录
   diagnostics/          可选诊断探针
-packaging/              C# 托盘启动器、Windows 清单、Inno Setup 脚本
+desktop/                Electron 主窗口、托盘与接收服务生命周期
+packaging/              Windows 图标和 Inno Setup 脚本
 scripts/                构建工具准备、打包、成品与安装验证
 tests/                  自动化测试与真实浏览器验证
 docs/images/            README 演示截图

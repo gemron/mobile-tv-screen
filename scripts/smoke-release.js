@@ -40,7 +40,7 @@ async function main() {
   assert.ok(!fs.existsSync(path.join(release, 'app', 'data')), 'No development data in release');
   assert.ok(!fs.existsSync(path.join(release, 'app', 'src', 'diagnostics')), 'No development diagnostics');
   let compared = 0;
-  for (const directory of ['src', 'public', 'docs']) {
+  for (const directory of ['src', 'public', 'desktop', 'docs']) {
     for (const relative of fs.readdirSync(path.join(root, directory), { recursive: true })) {
       if (directory === 'src' && relative.split(path.sep).includes('diagnostics')) continue;
       const source = path.join(root, directory, relative);
@@ -72,7 +72,7 @@ async function main() {
   // Prove the installed development Node/FFmpeg and global modules are unnecessary.
   env.PATH = path.join(process.env.WINDIR || 'C:\\Windows', 'System32');
   delete env.NODE_PATH;
-  const args = ['--no-window', '--self-test', '--port', String(port)];
+  const args = ['--no-window', '--self-test', '--port', String(port), '--remote-debugging-port=0'];
   child = spawn(executable, args, { env, cwd: sandbox, windowsHide: true, stdio: 'ignore' });
   let spawnError;
   child.on('error', error => { spawnError = error; });
@@ -166,7 +166,36 @@ async function main() {
     assert.equal(volume.state.volume, 73);
   } finally { socket.close(); }
   console.log('PASS: packaged WebSocket control and HTTP control work');
-  execFileSync(executable, ['--quit', '--port', String(port)], { windowsHide: true, cwd: sandbox, timeout: 10000 });
+  // Open the real Electron window via the tray instance and inspect decoded
+  // frames, since HTTP success alone cannot establish Chromium codec support.
+  execFileSync(executable, ['--self-test', '--port', String(port)], { env, windowsHide: true, cwd: sandbox, timeout: 10000 });
+  await until(async () => (await (await request('/api/status')).json()).state.protocols.websocket.tvClients > 0);
+  const debugPort = fs.readFileSync(path.join(data, 'electron', String(port), 'DevToolsActivePort'), 'utf8').split(/\r?\n/)[0];
+  const pages = await (await fetch('http://127.0.0.1:' + debugPort + '/json/list')).json();
+  const player = pages.find(page => page.type === 'page' && page.url === base + '/');
+  assert.ok(player, 'Packaged Electron loaded the local receiver window');
+  const inspect = new WebSocket(player.webSocketDebuggerUrl);
+  try {
+    await new Promise((resolve, reject) => { inspect.onopen = resolve; inspect.onerror = reject; });
+    inspect.send(JSON.stringify({ id: 1, method: 'Runtime.enable' }));
+    const playing = (await request('/api/cast/test', { method: 'POST' })).ok;
+    assert.ok(playing);
+    let sequence = 1;
+    await until(async () => {
+      const id = ++sequence;
+      const result = new Promise(resolve => {
+        const onMessage = event => {
+          const message = JSON.parse(event.data);
+          if (message.id === id) { inspect.removeEventListener('message', onMessage); resolve(message.result?.result?.value); }
+        };
+        inspect.addEventListener('message', onMessage);
+      });
+      inspect.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: 'Boolean(tvVideo.videoWidth && tvVideo.currentTime > 0.5 && tvVideo.getVideoPlaybackQuality().totalVideoFrames > 2 && !tvVideo.paused && typeof require === "undefined")', returnByValue: true } }));
+      return await result;
+    });
+  } finally { inspect.close(); }
+  console.log('PASS: packaged sandboxed Electron window decodes and plays local video');
+  execFileSync(executable, ['--quit', '--port', String(port)], { env, windowsHide: true, cwd: sandbox, timeout: 10000 });
   await until(async () => child.exitCode !== null, 10000);
   assert.equal(child.exitCode, 0);
   await until(async () => { try { await fetch(base + '/api/status', { signal: AbortSignal.timeout(500) }); return false; } catch { return true; } }, 5000);

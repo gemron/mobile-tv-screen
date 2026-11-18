@@ -19,7 +19,7 @@ castState.stop('Test');
 
 // Run the actual TV script with browser boundaries stubbed. Inspect the URL
 // handed to the media engine rather than duplicating the routing implementation.
-function createPlayer({ hls = false, now = () => performance.now() } = {}) {
+function createPlayer({ hls = false, now = () => performance.now(), origin = 'http://127.0.0.1:8080' } = {}) {
   const elements = new Map();
   const intervals = [];
   const hlsSources = [];
@@ -77,7 +77,7 @@ function createPlayer({ hls = false, now = () => performance.now() } = {}) {
   const context = vm.createContext({
     document,
     window: { addEventListener() {}, ...(hls ? { Hls: FakeHls } : {}) },
-    location: new URL('http://127.0.0.1:8080/'),
+    location: new URL(origin),
     URL,
     WebSocket: FakeWebSocket,
     performance: { now },
@@ -153,6 +153,12 @@ assert.equal(compatibleMkv.pathname, '/api/transcode', 'an MKV with only its aud
 const protectedInput = new URL(compatibleMkv.searchParams.get('url'));
 assert.equal(protectedInput.pathname, '/api/proxy');
 assert.equal(protectedInput.searchParams.get('headerContext'), 'private', 'MKV remux retains the protected parallel input proxy');
+const lanPlayer = createPlayer({ origin: 'http://192.168.1.8:8080' });
+const lanVideo = lanPlayer.cast(originalUrl, 'transcode');
+lanPlayer.seek(40);
+const lanInput = new URL(new URL(lanVideo.src, 'http://localhost').searchParams.get('url'));
+assert.equal(lanInput.searchParams.get('seekRead'), '1', 'LAN receivers preserve the original read-ahead window during a container index probe');
+assert.equal(lanInput.searchParams.get('headerContext'), 'private');
 audioOnlyMkv.duration = Infinity; audioOnlyMkv.listeners.loadedmetadata();
 assert.equal(missingMkvVideo.elements.get('seekSlider').max, 7380, 'remux retains the original duration for seeking');
 assert.equal(audioOnlyMkv.paused, true, 'an unsupported video track cannot silently continue as audio-only playback');
@@ -196,6 +202,8 @@ fpsPlayer.progress({sessionId:0,remuxBuffer:{active:false}});
 assert.equal(fpsPlayer.elements.get('metricRemux').hidden,false,'stale telemetry cannot hide the active remux reserve');
 fpsPlayer.progress({ sessionId: 2, originalBuffer: { active: false } });
 assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, false, 'stale buffer telemetry cannot hide the active session');
+fpsPlayer.seek(200);
+assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, false, 'Replacing the output stream keeps the original-file cache readout');
 fpsPlayer.cast('', 'auto', 'video', { status: 'IDLE' });
 assert.equal(fpsPlayer.elements.get('metricBuffer').hidden, true);
 const cancelledOriginal = createPlayer();
@@ -385,7 +393,11 @@ assert.equal(seekReuseVideo.src, seekReuseUrl, 'A seek inside native buffered da
 assert.equal(seekReuseVideo.loadCalls, seekReuseLoads);
 seekReuse.elements.get('seekSlider').value = 300;
 seekReuse.elements.get('seekSlider').listeners.input();
+assert.equal(seekReuse.elements.get('seekPlayed').style.width, '2%', 'The preview thumb must not paint over the buffered range');
 assert.equal(seekReuseVideo.loadCalls, seekReuseLoads, 'Dragging previews the target without restarting downloads for every pointer movement');
+seekReuseVideo.seekable = { length: 1, start: () => 0, end: () => 0 };
+seekReuse.seek(15);
+assert.equal(new URL(seekReuseVideo.src, 'http://localhost').searchParams.get('start'), '15', 'Native streaming with no seekable interval must reopen at the requested time');
 seekReuse.seek(200); seekReuse.seek(40); seekReuse.seek(320);
 assert.equal(new URL(seekReuseVideo.src, 'http://localhost').searchParams.get('start'), '320');
 assert.equal(seekReuse.elements.get('metricRemux').hidden, true, 'A replacement seek hides the old reserve until the current request reports data');

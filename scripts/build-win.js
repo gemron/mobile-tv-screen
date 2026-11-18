@@ -39,6 +39,7 @@ async function main() {
   const app = path.join(release, 'app');
   copy(path.join(root, 'src'), path.join(app, 'src'), { filter: source => !path.relative(path.join(root, 'src'), source).split(path.sep).includes('diagnostics') });
   copy(path.join(root, 'public'), path.join(app, 'public'));
+  copy(path.join(root, 'desktop'), path.join(app, 'desktop'));
   copy(path.join(root, 'package.json'), path.join(app, 'package.json'));
   copy(path.join(root, 'package-lock.json'), path.join(app, 'package-lock.json'));
   for (const file of ['README.md', 'LICENSE', 'CHANGELOG.md', 'THIRD_PARTY_NOTICES.md', 'SECURITY.md', 'CONTRIBUTING.md']) copy(path.join(root, file), path.join(release, file));
@@ -84,7 +85,7 @@ async function main() {
     `MobileTV ${pkg.version} · Windows 64 位免安装版`, '',
     '用途声明：仅供学习研究和非商业技术测试使用，禁止商业售卖。',
     '第三方组件及历史 MIT 代码遵循各自许可证，详见 LICENSE 和 THIRD_PARTY_NOTICES.md。', '',
-    '本版新增：XS 订阅适配、片源镜像切换；修复海报、拖动缓存和返回列表状态。',
+    '本版使用 Electron 桌面播放器，沿用已有订阅、收藏、账号和播放历史。',
     '缩小媒体工具和依赖体积，保留音轨、内置字幕、免费字幕搜索和片头片尾跳过。',
     '夸克临时剧集默认在播完／换集后或空间不足时移入回收站，可在账号管理关闭。',
     '只清理本软件转存记录中的文件，保护当前播放和正在保存的文件，不清空回收站。',
@@ -101,9 +102,8 @@ async function main() {
     '5. 需要再次打开界面时，双击托盘图标或再次运行 MobileTV.exe。', '',
     '常用快捷键：空格 / K 播放暂停；左右方向键快退快进；上下方向键调节音量；',
     'F 全屏；M 静音；? 查看帮助；Esc 关闭面板或退出全屏。', '',
-    '系统：Windows 10 / 11 x64，使用系统自带 .NET Framework 4.x。',
-    '播放器优先使用已安装的 Chrome，未安装时使用 Microsoft Edge；已内置 Node.js 和 FFmpeg。',
-    'Chrome 与 Edge 使用各自独立的播放配置。环境变量 MOBILETV_PLAYER_BROWSER=edge 可优先使用 Edge。',
+    '系统：Windows 10 / 11 x64。已内置 Electron、Node.js、FFmpeg 和 FFprobe。',
+    '片源登录和验证仍使用独立浏览器配置。',
     '本机地址：http://127.0.0.1:8080/ 。主服务 8080，AirPlay 7000，影视投屏 9978。',
     '苹果接收支持基础 AirPlay 视频和照片；不支持苹果屏幕镜像或 DRM 视频。',
     'Android 17 上请使用支持本地网络权限的新版视频 App，并允许相关权限。', '',
@@ -115,18 +115,31 @@ async function main() {
     '使用非默认端口时，退出命令也需带相同的 --port。',
     '环境变量 MOBILETV_DATA_DIR 可指定独立数据目录。', '',
   ].join('\r\n'));
-  console.log('Compiling the Windows launcher...');
+  console.log('Packaging the Electron desktop application...');
   const generated = path.join(root, 'build', name);
   fs.mkdirSync(generated, { recursive: true });
   const icon = path.join(generated, 'MobileTV.ico');
   createIcon(icon);
-  const versionSource = path.join(generated, 'AssemblyInfo.cs');
-  write(versionSource, `using System.Reflection;\n[assembly: AssemblyTitle("MobileTV")]\n[assembly: AssemblyProduct("MobileTV")]\n[assembly: AssemblyVersion("${pkg.version}.0")]\n[assembly: AssemblyFileVersion("${pkg.version}.0")]\n`);
-  const compiler = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
-  console.log(run(compiler, ['/nologo', '/target:winexe', '/platform:x64', '/optimize+', '/codepage:65001', '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll', `/win32icon:${icon}`, `/win32manifest:${path.join(root, 'packaging', 'app.manifest')}`, `/out:${path.join(release, 'MobileTV.exe')}`, path.join(root, 'packaging', 'Launcher.cs'), versionSource]).trim());
+  const electronDist = path.dirname(require('electron'));
+  const electronVersion = require('electron/package.json').version;
+  for (const entry of fs.readdirSync(electronDist)) {
+    if (entry === 'electron.d.ts') continue;
+    const dest = { 'electron.exe': 'MobileTV.exe', 'electron_wer.dll': 'MobileTV_wer.dll', LICENSE: 'licenses/Electron-LICENSE.txt' }[entry] || entry;
+    copy(path.join(electronDist, entry), path.join(release, dest), {
+      filter: file => path.basename(file) !== 'default_app.asar',
+    });
+  }
+  const entryDir = path.join(release, 'resources', 'app');
+  fs.mkdirSync(entryDir, { recursive: true });
+  write(path.join(entryDir, 'package.json'), JSON.stringify({ name: pkg.name, productName: 'MobileTV', version: pkg.version, main: 'main.js' }));
+  write(path.join(entryDir, 'main.js'), "require('../../app/desktop/main.js');\n");
+  const { rcedit } = await import('rcedit');
+  await rcedit(path.join(release, 'MobileTV.exe'), { icon, 'file-version': pkg.version, 'product-version': pkg.version,
+    'version-string': { ProductName: 'MobileTV', FileDescription: 'MobileTV', CompanyName: pkg.author, OriginalFilename: 'MobileTV.exe' } });
   let sourceCommit = null, sourceDirty = null;
   try { sourceCommit = run('git', ['rev-parse', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); sourceDirty = Boolean(run('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim()); } catch { /* Source archives may not include Git metadata. */ }
   const info = { name: 'MobileTV', version: pkg.version, platform: 'win32', arch: 'x64', builtAt: new Date().toISOString(), sourceCommit, sourceDirty, node: process.version, ffmpeg: ffmpegVersion, dependencies: dependencies.length, sha256: { 'runtime/node.exe': await hash(runtime), 'tools/ffmpeg.exe': await hash(ffmpeg), 'tools/ffprobe.exe': await hash(path.join(release,'tools','ffprobe.exe')), 'MobileTV.exe': await hash(path.join(release, 'MobileTV.exe')) } };
+  info.electron = electronVersion;
   write(path.join(release, 'build-info.json'), JSON.stringify(info, null, 2) + '\n');
   console.log('Creating portable ZIP...');
   const zip = path.join(dist, name + '.zip');

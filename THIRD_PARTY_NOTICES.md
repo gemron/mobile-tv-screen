@@ -4,6 +4,7 @@ MobileTV 1.2.1 起，有权授权的自有代码采用[学习研究与非商业�
 
 | 组件 | 用途 | 许可与来源 |
 | --- | --- | --- |
+| Electron / Chromium | 桌面窗口、媒体播放与托盘 | [Electron 许可](https://github.com/electron/electron/blob/main/LICENSE)。发行包内附 `licenses/Electron-LICENSE.txt` 及 `LICENSES.chromium.html` |
 | Node.js | JavaScript 服务端运行时 | MIT 及其捆绑组件许可；[源码及完整 LICENSE](https://github.com/nodejs/node) |
 | FFmpeg / Gyan Windows build | 生成诊断媒体、视频码流复制转封装、音频格式兼容 | 当前构建声明 GPL v3；[原始分发](https://github.com/GyanD/codexffmpeg/releases/tag/8.0.1)、[FFmpeg 源码](https://github.com/FFmpeg/FFmpeg/commit/894da5ca7d)、[构建说明与配置](https://www.gyan.dev/ffmpeg/builds/) |
 | hls.js | HLS 播放 | Apache-2.0；[上游](https://github.com/video-dev/hls.js) |
