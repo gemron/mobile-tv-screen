@@ -13,7 +13,7 @@
 
 [下载安装包](https://github.com/gemron/mobile-tv-screen/releases/latest) · [使用指南](#快速开始) · [常见问题](#常见问题) · [参与开发](CONTRIBUTING.md) · [反馈问题](https://github.com/gemron/mobile-tv-screen/issues)
 
-当前版本 [1.4.0](https://github.com/gemron/mobile-tv-screen/releases/tag/v1.4.0)（2026-11-19）使用 Electron 桌面播放器，沿用已有订阅、收藏和账号，改进 MKV 拖动时的缓存复用。提供 Windows 安装包、便携包及 SHA-256 校验文件。
+当前版本 **1.4.1**（2026-11-20）提供 Windows x64 离线安装包（145.28 MiB）、在线安装器（2.76 MiB）和便携 ZIP（204.61 MiB）。离线包比 1.4.0 小 38.2%。[下载与更新说明](https://github.com/gemron/mobile-tv-screen/releases/tag/v1.4.1)
 
 </div>
 
