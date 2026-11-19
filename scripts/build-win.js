@@ -49,15 +49,28 @@ async function main() {
   console.log(`Production dependency files: ${(staged.shippedBytes / 1048576).toFixed(1)} MiB`);
   const runtime = path.join(release, 'runtime', 'node.exe');
   copy(process.execPath, runtime);
-  const preparedFfmpeg = path.join(root, 'build', 'tools', 'ffmpeg-8.1.2-essentials_build', 'bin', 'ffmpeg.exe');
+  const sharedRoot = path.join(root, 'build', 'tools', 'ffmpeg-8.1.2-mobiletv');
+  const preparedFfmpeg = fs.existsSync(path.join(sharedRoot, 'runtime-files.txt'))
+    ? path.join(sharedRoot, 'bin', 'ffmpeg.exe')
+    : path.join(root, 'build', 'tools', 'ffmpeg-8.1.2-essentials_build', 'bin', 'ffmpeg.exe');
   const ffmpegPath = fs.realpathSync(process.env.FFMPEG_PATH || (fs.existsSync(preparedFfmpeg) ? preparedFfmpeg : run('where.exe', ['ffmpeg.exe']).trim().split(/\r?\n/)[0]));
   const ffmpeg = path.join(release, 'tools', 'ffmpeg.exe');
   copy(ffmpegPath, ffmpeg);
   const ffprobePath = path.join(path.dirname(ffmpegPath), 'ffprobe.exe');
   if (!fs.existsSync(ffprobePath)) throw new Error('The matching FFmpeg distribution must include ffprobe.exe for embedded tracks.');
   copy(ffprobePath, path.join(release, 'tools', 'ffprobe.exe'));
-  const ffmpegVersion = run(ffmpeg, ['-version']).split(/\r?\n/)[0];
   const ffmpegRoot = path.dirname(path.dirname(ffmpegPath));
+  const runtimeManifest = path.join(ffmpegRoot, 'runtime-files.txt');
+  const runtimeFiles = fs.existsSync(runtimeManifest)
+    ? fs.readFileSync(runtimeManifest, 'utf8').trim().split(/\r?\n/)
+    : fs.readdirSync(path.dirname(ffmpegPath)).filter(file => /^(av(codec|device|filter|format|util)|sw(resample|scale)|postproc)-\d+\.dll$/i.test(file));
+  for (const file of runtimeFiles) {
+    if (file === 'ffmpeg.exe' || file === 'ffprobe.exe') continue;
+    if (path.basename(file) !== file || !file.toLowerCase().endsWith('.dll')) throw new Error('Unexpected FFmpeg runtime file: ' + file);
+    copy(path.join(path.dirname(ffmpegPath), file), path.join(release, 'tools', file));
+  }
+  const ffmpegVersion = run(ffmpeg, ['-version']).split(/\r?\n/)[0];
+  if (fs.existsSync(runtimeManifest)) copy(path.join(ffmpegRoot, 'licenses'), path.join(release, 'licenses', 'FFmpeg-components'));
   for (const [source, target] of [['LICENSE', 'FFmpeg-LICENSE.txt'], ['README.txt', 'FFmpeg-README.txt']]) {
     const file = path.join(ffmpegRoot, source);
     if (!fs.existsSync(file)) throw new Error(`Missing FFmpeg distribution notice: ${file}`);
@@ -122,11 +135,18 @@ async function main() {
   createIcon(icon);
   const electronDist = path.dirname(require('electron'));
   const electronVersion = require('electron/package.json').version;
+  const locales = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak']);
+  const localeDir = path.join(electronDist, 'locales');
+  for (const locale of locales) fs.accessSync(path.join(localeDir, locale));
+  const obsoleteLocales = fs.readdirSync(localeDir).filter(file => file.endsWith('.pak') && !locales.has(file));
+  write(path.join(generated, 'obsolete-locales.iss'), obsoleteLocales.map(file =>
+    `Type: files; Name: "{app}\\locales\\${file}"`).join('\n'));
   for (const entry of fs.readdirSync(electronDist)) {
     if (entry === 'electron.d.ts') continue;
     const dest = { 'electron.exe': 'MobileTV.exe', 'electron_wer.dll': 'MobileTV_wer.dll', LICENSE: 'licenses/Electron-LICENSE.txt' }[entry] || entry;
     copy(path.join(electronDist, entry), path.join(release, dest), {
-      filter: file => path.basename(file) !== 'default_app.asar',
+      filter: file => path.basename(file) !== 'default_app.asar' &&
+        (path.dirname(file) !== localeDir || locales.has(path.basename(file))),
     });
   }
   const entryDir = path.join(release, 'resources', 'app');
@@ -140,6 +160,9 @@ async function main() {
   try { sourceCommit = run('git', ['rev-parse', 'HEAD'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim(); sourceDirty = Boolean(run('git', ['status', '--porcelain', '--untracked-files=normal'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).trim()); } catch { /* Source archives may not include Git metadata. */ }
   const info = { name: 'MobileTV', version: pkg.version, platform: 'win32', arch: 'x64', builtAt: new Date().toISOString(), sourceCommit, sourceDirty, node: process.version, ffmpeg: ffmpegVersion, dependencies: dependencies.length, sha256: { 'runtime/node.exe': await hash(runtime), 'tools/ffmpeg.exe': await hash(ffmpeg), 'tools/ffprobe.exe': await hash(path.join(release,'tools','ffprobe.exe')), 'MobileTV.exe': await hash(path.join(release, 'MobileTV.exe')) } };
   info.electron = electronVersion;
+  for (const file of runtimeFiles.filter(file => file.endsWith('.dll'))) {
+    info.sha256['tools/' + file] = await hash(path.join(release, 'tools', file));
+  }
   write(path.join(release, 'build-info.json'), JSON.stringify(info, null, 2) + '\n');
   console.log('Creating portable ZIP...');
   const zip = path.join(dist, name + '.zip');

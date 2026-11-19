@@ -26,11 +26,27 @@ if (-not (Test-Path -LiteralPath $compiler)) {
 }
 $env:ISCC_PATH = $compiler
 if (-not $SkipFFmpeg) {
-    $archive = Get-VerifiedDownload 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-8.1.2-essentials_build.7z' 'ffmpeg-8.1.2-essentials_build.7z' 'E25B682664025D49034C981AFB4BAE36238A40F29A3CC1C713AD9A8B5B3528F6'
-    $ffmpeg = Join-Path $toolsRoot 'ffmpeg-8.1.2-essentials_build\bin\ffmpeg.exe'
-    if (-not (Test-Path -LiteralPath $ffmpeg)) {
-        & tar.exe -xf $archive -C $toolsRoot 'ffmpeg-8.1.2-essentials_build/bin' 'ffmpeg-8.1.2-essentials_build/LICENSE' 'ffmpeg-8.1.2-essentials_build/README.txt'
-        if ($LASTEXITCODE -ne 0) { throw 'FFmpeg archive extraction failed.' }
+    $mediaRoot = Join-Path $toolsRoot 'ffmpeg-8.1.2-mobiletv'
+    $ffmpeg = Join-Path $mediaRoot 'bin\ffmpeg.exe'
+    $recipe = Join-Path $PSScriptRoot 'build-ffmpeg.sh'
+    $builtRecipe = Join-Path $mediaRoot 'licenses\build-ffmpeg.sh'
+    $prepared = (Test-Path -LiteralPath (Join-Path $mediaRoot 'runtime-files.txt')) -and
+        (Test-Path -LiteralPath $builtRecipe) -and
+        ((Get-FileHash -LiteralPath $builtRecipe).Hash -eq (Get-FileHash -LiteralPath $recipe).Hash)
+    if (-not $prepared) {
+        $work = Join-Path $projectRoot 'build\media-build'
+        $bash = Join-Path $work 'msys64\usr\bin\bash.exe'
+        if (-not (Test-Path -LiteralPath $bash)) {
+            $archive = Get-VerifiedDownload 'https://repo.msys2.org/distrib/x86_64/msys2-base-x86_64-20260927.sfx.exe' 'msys2-base-x86_64-20260927.sfx.exe' 'AD336CCCFDA47758B5E15CDA993FBBA421115CB0B126697DAEF1EE4DFE37209F'
+            New-Item -ItemType Directory -Force -Path $work | Out-Null
+            & $archive -y "-o$work" | Out-Host
+            if ($LASTEXITCODE -ne 0) { throw 'MSYS2 extraction failed.' }
+        }
+        $env:MSYSTEM = 'UCRT64'
+        & $bash -lc 'pacman -Sy --needed --noconfirm make nasm mingw-w64-ucrt-x86_64-{gcc,pkgconf,libass,libx264,x265,dav1d,zlib,xz,bzip2}'
+        if ($LASTEXITCODE -ne 0) { throw 'MSYS2 build dependencies failed.' }
+        & $bash --login ($recipe.Replace('\','/'))
+        if ($LASTEXITCODE -ne 0) { throw 'Shared FFmpeg build failed.' }
     }
     $env:FFMPEG_PATH = $ffmpeg
     $env:PATH = (Split-Path -Parent $ffmpeg) + ';' + $env:PATH

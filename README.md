@@ -284,14 +284,17 @@ npm run build:win
 npm run build:installer
 npm run test:release -- --zip
 npm run test:installer
+npm run test:installer -- --online
 ```
 
 - `build:win`：使用当前 x64 Node.js、生产依赖和 FFmpeg 生成便携目录、ZIP、SHA-256 文件与 `dist/latest-release.json`。
-- `build:installer`：从最新便携目录编译当前用户安装版 EXE，同时生成发布附件校验清单。
+- `build:installer` 生成离线安装包、在线安装器和 SHA-256 校验清单。在线安装器优先使用同目录的匹配离线包，单独运行时从对应版本的 GitHub 附件下载。可用 `/SOURCE=http://127.0.0.1:端口/文件名` 测试本地镜像，两种来源都必须通过内置 SHA-256 校验。
 - `test:release`：使用已编译 EXE 验证启动、独立数据目录、离线资源、分片缓存、Range、FFmpeg、控制和退出；`--zip` 会先验证校验和并解压到含中文和空格的临时路径。
 - `test:installer`：在临时目录静默安装、运行成品验证并卸载，不使用正常的用户数据目录。
 
 如已自行安装工具，可以通过 `FFMPEG_PATH` 指定 `ffmpeg.exe`，通过 `ISCC_PATH` 指定 Inno Setup 7 的 `ISCC.exe`。FFmpeg 所在发行目录应包含相应 `LICENSE` 与 `README.txt`。
+
+首次准备媒体工具时，脚本在项目的 `build/media-build` 中解压 MSYS2，并从 FFmpeg 8.1.2 源码编译 Windows x64 共享库。构建配方在 `scripts/build-ffmpeg.sh`，成品只携带两个命令行工具及其运行所需的 DLL。
 
 ### 测试命令
 

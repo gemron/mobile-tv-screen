@@ -38,6 +38,7 @@ async function main() {
   }
   for (const file of ['MobileTV.exe', 'runtime/node.exe', 'tools/ffmpeg.exe', 'tools/ffprobe.exe', 'app/src/server.js', 'licenses/Node-LICENSE.txt', 'licenses/FFmpeg-LICENSE.txt']) assert.ok(fs.existsSync(path.join(release, file)), file);
   assert.ok(!fs.existsSync(path.join(release, 'app', 'data')), 'No development data in release');
+  assert.deepEqual(fs.readdirSync(path.join(release, 'locales')).sort(), ['en-US.pak', 'zh-CN.pak', 'zh-TW.pak']);
   assert.ok(!fs.existsSync(path.join(release, 'app', 'src', 'diagnostics')), 'No development diagnostics');
   let compared = 0;
   for (const directory of ['src', 'public', 'desktop', 'docs']) {
@@ -55,13 +56,19 @@ async function main() {
   const buildInfo = JSON.parse(fs.readFileSync(path.join(release, 'build-info.json'), 'utf8'));
   assert.equal(buildInfo.sourceCommit, latest.sourceCommit);
   assert.equal(buildInfo.version, latest.version);
+  for (const [file, expected] of Object.entries(buildInfo.sha256)) {
+    const digest = crypto.createHash('sha256');
+    for await (const chunk of fs.createReadStream(path.join(release, file))) digest.update(chunk);
+    assert.equal(digest.digest('hex'), expected, file);
+  }
   console.log(`PASS: ${compared} shipped source, asset and documentation files match the release checkout`);
   assert.equal(execFileSync(path.join(release, 'runtime', 'node.exe'), ['--version'], { encoding: 'utf8', windowsHide: true }).trim(), latest.node);
-  assert.match(execFileSync(path.join(release, 'tools', 'ffmpeg.exe'), ['-version'], { encoding: 'utf8', windowsHide: true }), /ffmpeg version/);
-  const ffmpeg=path.join(release,'tools','ffmpeg.exe'), ffOptions={encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']};
+  const ffmpeg=path.join(release,'tools','ffmpeg.exe'), ffOptions={encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe'],env:{...process.env,PATH:path.join(process.env.WINDIR,'System32')}};
+  assert.match(execFileSync(ffmpeg, ['-version'], ffOptions), /ffmpeg version/);
+  assert.match(execFileSync(path.join(release, 'tools', 'ffprobe.exe'), ['-version'], ffOptions), /ffprobe version/);
   const decoders=execFileSync(ffmpeg,['-hide_banner','-decoders'],ffOptions),encoders=execFileSync(ffmpeg,['-hide_banner','-encoders'],ffOptions),filters=execFileSync(ffmpeg,['-hide_banner','-filters'],ffOptions);
   for(const codec of ['h264','hevc','aac','ac3','dca','subrip','ass'])assert.match(decoders,new RegExp('\\b'+codec+'\\b'),'Bundled decoder '+codec);
-  for(const codec of ['aac','libx264'])assert.match(encoders,new RegExp('\\b'+codec+'\\b'),'Bundled encoder '+codec);
+  for(const codec of ['aac','libx264','webvtt','mov_text','subrip'])assert.match(encoders,new RegExp('\\b'+codec+'\\b'),'Bundled encoder '+codec);
   assert.match(filters,/\bsubtitles\b/,'Subtitle rendering remains available');
   execFileSync(path.join(release,'runtime','node.exe'),['--input-type=module','-e',"const [{default:Torrent},{default:Store}]=await Promise.all([import('webtorrent'),import('fs-chunk-store')]);if(typeof Store!=='function')throw Error('Missing disk store');const c=new Torrent({dht:false,tracker:false,lsd:false,utp:false});await new Promise((r,j)=>c.destroy(e=>e?j(e):r()));"],{cwd:path.join(release,'app'),env:{...process.env,NODE_PATH:''},windowsHide:true,stdio:['ignore','pipe','pipe'],timeout:15000});
   console.log('PASS: slim media tools retain video/audio/subtitle codecs and staged torrent dependencies initialize offline');
@@ -166,6 +173,9 @@ async function main() {
     assert.equal(volume.state.volume, 73);
   } finally { socket.close(); }
   console.log('PASS: packaged WebSocket control and HTTP control work');
+  // Finish the paused control fixture before a newly opened window joins it.
+  const stopped = await request('/api/control', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'stop' }) });
+  assert.equal((await stopped.json()).state.status, 'IDLE');
   // Open the real Electron window via the tray instance and inspect decoded
   // frames, since HTTP success alone cannot establish Chromium codec support.
   execFileSync(executable, ['--self-test', '--port', String(port)], { env, windowsHide: true, cwd: sandbox, timeout: 10000 });
@@ -180,7 +190,7 @@ async function main() {
     inspect.send(JSON.stringify({ id: 1, method: 'Runtime.enable' }));
     const playing = (await request('/api/cast/test', { method: 'POST' })).ok;
     assert.ok(playing);
-    let sequence = 1;
+    let sequence = 1, mediaState;
     await until(async () => {
       const id = ++sequence;
       const result = new Promise(resolve => {
@@ -190,9 +200,10 @@ async function main() {
         };
         inspect.addEventListener('message', onMessage);
       });
-      inspect.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: 'Boolean(tvVideo.videoWidth && tvVideo.currentTime > 0.5 && tvVideo.getVideoPlaybackQuality().totalVideoFrames > 2 && !tvVideo.paused && typeof require === "undefined")', returnByValue: true } }));
-      return await result;
-    });
+      inspect.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression: '({width:tvVideo.videoWidth,time:tvVideo.currentTime,frames:tvVideo.getVideoPlaybackQuality().totalVideoFrames,paused:tvVideo.paused,sandboxed:typeof require === "undefined",source:tvVideo.currentSrc,readyState:tvVideo.readyState,error:tvVideo.error?.message})', returnByValue: true } }));
+      mediaState = await result;
+      return mediaState?.width && mediaState.time > 0.5 && mediaState.frames > 2 && !mediaState.paused && mediaState.sandboxed;
+    }).catch(error => { throw new Error(error.message + ': ' + JSON.stringify(mediaState)); });
   } finally { inspect.close(); }
   console.log('PASS: packaged sandboxed Electron window decodes and plays local video');
   execFileSync(executable, ['--quit', '--port', String(port)], { env, windowsHide: true, cwd: sandbox, timeout: 10000 });

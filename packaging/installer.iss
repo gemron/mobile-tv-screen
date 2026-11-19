@@ -30,7 +30,10 @@ LicenseFile={#ProjectRoot}\LICENSE
 SetupIconFile={#AppIcon}
 OutputDir={#OutputDir}
 OutputBaseFilename=MobileTV-{#AppVersion}-Setup-x64
-Compression=lzma2/fast
+#ifndef CompressionLevel
+  #define CompressionLevel "lzma2/max"
+#endif
+Compression={#CompressionLevel}
 SolidCompression=yes
 WizardStyle=modern
 SetupLogging=yes
@@ -44,6 +47,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[InstallDelete]
+#include "obsolete-locales.iss"
 
 [Icons]
 Name: "{group}\MobileTV"; Filename: "{app}\MobileTV.exe"; WorkingDir: "{app}"
