@@ -6,29 +6,34 @@ const { scriptObject } = require('../html-sites');
 const acorn = require('acorn');
 const { value: literalValue } = require('../literals');
 const UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+const MOBILE_UA='Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
 const definitions={NewCz:['newcz','https://www.4kcz.com/'],Bttwoo:['bttwoo','https://www.bttwo.life/'],Libvio:['libvio','https://www.libvio.pw/'],Nmyswv:['nmys','https://vip.wwgz.cn:5200/']};
-const trim=v=>String(v||'').replace(/\s+/g,' ').trim();
+const trim=v=>String(v||'').replace(/[\u200b-\u200d\ufeff]/g,'').replace(/\s+/g,' ').trim();
 const media=u=>/\.(mp4|m3u8|flv|mp3|m4a)(?:[?#]|$)/i.test(u||'');
 function describe(raw,base){
   const name=/^csp_(\w+?)(?:Guard)?$/.exec(raw.api)?.[1],def=definitions[name];if(!def)return null;
   const ext=typeof raw.ext==='object'&&raw.ext||{};
   const api=webUrl(ext.siteUrl||def[1],base);
-  return {adapter:def[0],api,supported:true,implementation:'node-html-'+def[0],headers:cleanHeaders({'user-agent':UA,referer:api,...raw.header,...raw.headers})};
+  const mobile=def[0]==='nmys';
+  return {adapter:def[0],api,supported:true,implementation:'node-html-'+def[0],...(mobile?{fixedUserAgent:true}:{}),headers:cleanHeaders({'user-agent':mobile?MOBILE_UA:UA,referer:api,...raw.header,...raw.headers})};
 }
 async function page(site,path,signal){
   const address=webUrl(path,site.api);let r;
   try{r=await resource(address,{headers:site.headers,signal,limit:4*1024*1024});}
-  catch(error){if(!site.browser||!/403|503/.test(error.message))throw error;r=await site.browser.run(address,{signal});}
-  if(site.browser&&/<title>[^<]*(?:人机验证|Just a moment|Checking your browser)/i.test(r.text))r=await site.browser.run(address,{signal});
-  if(r.cookie)site.headers.cookie=r.cookie;
+  catch(error){
+    if(error.status===428||error.code==='SOURCE_REGION_BLOCKED'||!site.browser||!/403|503/.test(error.message))throw error;
+    r=await site.browser.run(address,{signal});
+  }
+  if(r.cookie&&!site.cookieOverride)site.headers.cookie=r.cookie;
+  if(r.userAgent&&!site.fixedUserAgent)site.headers['user-agent']=r.userAgent;
   return {...r,$:cheerio.load(r.text)};
 }
 function cards($,kind){
-  const rows=kind==='newcz'?$('div.mi_ne_kd > ul > li'):kind==='bttwoo'?$('[data-vod-id]'):$('.stui-vodlist__box, .myui-vodlist__box, .hl-vod-list li, .fed-list-item, .module-item, .myui-vodlist li');
+  const rows=kind==='newcz'?$('div.mi_ne_kd > ul > li'):kind==='bttwoo'?$('[data-vod-id]'):kind==='nmys'?$('.resize_list li, .swiper-slide, .stui-vodlist__box, .myui-vodlist__box, .hl-vod-list li, .fed-list-item, .module-item, .myui-vodlist li'):$('.stui-vodlist__box, .myui-vodlist__box, .hl-vod-list li, .fed-list-item, .module-item, .myui-vodlist li');
   const result=[];
   rows.slice(0,300).each((_,e)=>{const row=$(e),a=row.find('h3 a,h4 a,h2 a,a[title]').first().length?row.find('h3 a,h4 a,h2 a,a[title]').first():row.find('a[href]').first();const img=row.find('img').first(),id=a.attr('href');
-    const name=trim(a.attr('title')||a.find('h3').text()||row.find('h3,h4,h2').first().text()||img.attr('alt'));
-    if(id&&name)result.push({vod_id:id,vod_name:name,vod_pic:img.attr('data-original')||img.attr('data-src')||img.attr('src')||a.attr('data-original'),vod_remarks:trim(row.find('.pic-text,.qb,.hdtag,.text-right').first().text())});
+    const name=trim(a.attr('title')||a.find('h3').text()||row.find('h3,h4,h2,p').first().text()||img.attr('alt'));
+    if(id&&name)result.push({vod_id:id,vod_name:name,vod_pic:img.attr('data-echo')||img.attr('data-original')||img.attr('data-src')||img.attr('src')||a.attr('data-original'),vod_remarks:trim(row.find('.pic-text,.qb,.hdtag,.text-right,.sStyle,.sDes').first().text())});
   });
   return [...new Map(result.map(r=>[r.vod_id,r])).values()];
 }
@@ -38,7 +43,11 @@ async function list(site,{id='',page:pg=1,keyword='',filters={}}={},signal){
   if(site.adapter==='bttwoo')path=keyword?'/search?q='+encodeURIComponent(keyword)+'&page='+pg:id?'/filter?classify='+encodeURIComponent(id)+'&page='+pg:path;
   if(site.adapter==='libvio')path=keyword?'/search/-------------.html?wd='+encodeURIComponent(keyword):id?`/show/${encodeURIComponent(id)}--------${pg}---.html`:path;
   if(site.adapter==='nmys')path=keyword?'/index.php?m=vod-search&wd='+encodeURIComponent(keyword):id?`/index.php?m=vod-list-id-${encodeURIComponent(id)}-pg-${pg}-order--by-${encodeURIComponent(filters.by||'')}-class--year-${encodeURIComponent(filters.year||'')}-letter--area-${encodeURIComponent(filters.area||'')}-lang-.html`:path;
-  const {$,url}=await page(site,path,signal),items=cards($,site.adapter),classes=[];
+  const {$,url,text:htmlText}=await page(site,path,signal);
+  if(site.adapter==='nmys'&&keyword&&/缺少文件/.test(htmlText||'')){
+    return {class:[],list:[],page:pg,pagecount:1,total:0,notice:'糯米当前暂不支持站内搜索，请按分类浏览或勾选“全站搜索”。'};
+  }
+  const items=cards($,site.adapter),classes=[];
   if(site.adapter==='bttwoo')classes.push(...[['1','电影'],['2','电视剧'],['3','动漫']].map(([type_id,type_name])=>({type_id,type_name})));
   else if(!id&&!keyword)$('ul.stui-header__menu a,.nav-menu a,.navlist a,.nav a,header a').each((_,el)=>{const a=$(el),name=trim(a.text()),href=a.attr('href')||'';if(!/^(电影|电视剧|剧集|动漫|番剧|综艺|国产剧|美剧|韩剧|日韩|欧美|纪录片)$/.test(name))return;
     let value;
@@ -53,8 +62,11 @@ async function list(site,{id='',page:pg=1,keyword='',filters={}}={},signal){
 }
 async function detail(site,id,signal){
   const {$,url}=await page(site,id,signal);
-  const title=trim($('h1').first().text()),img=$('.dyimg img,.stui-content__thumb img,.myui-content__thumb img,img[alt]').first();
-  const result={vod_id:id,vod_name:title,vod_pic:img.attr('data-original')||img.attr('data-src')||img.attr('src'),vod_content:trim($('.yp_context,.stui-content__desc,.detail-content,.text-text-secondary').first().text()),lines:[]};
+  const pageTitle=trim($('title').first().text());
+  const extractedTitle=/《([^》]+)》/.exec(pageTitle)?.[1]||pageTitle.split(/[-_|]/)[0];
+  const title=site.adapter==='nmys'?trim(extractedTitle||$('h1').last().text()):trim($('h1,.detail-title').first().text()||extractedTitle);
+  const img=$('.dyimg img,.stui-content__thumb img,.myui-content__thumb img,.pic img,img[alt]').first();
+  const result={vod_id:id,vod_name:title,vod_pic:img.attr('data-echo')||img.attr('data-original')||img.attr('data-src')||img.attr('src'),vod_content:trim($('.yp_context,.stui-content__desc,.detail-content,.text-text-secondary,.detail-intro').first().text()),lines:[]};
   if(site.adapter==='bttwoo'){
     const user=/userlink:\s*'([^']*)'/.exec($('nav#navbar').attr('x-data')||'')?.[1]||'0';
     const groups=new Map();
@@ -66,7 +78,7 @@ async function detail(site,id,signal){
     const episodes=$('a[href*="v_play"]').map((_,e)=>({name:trim($(e).text()),id:webUrl($(e).attr('href'),url)})).get();
     result.lines=[{name:'专线',episodes}];
   }else{
-    $('.stui-content__playlist,.myui-content__playlist,.play_list,.playlist,.play-list,.module-play-list').slice(0,30).each((index,e)=>{const episodes=$(e).find('a[href]').slice(0,2000).map((_,a)=>({name:trim($(a).text()),id:webUrl($(a).attr('href'),url)})).get();if(episodes.length)result.lines.push({name:trim($('.stui-pannel__head h3,.myui-panel__head h3,.tab_control li').eq(index).text())||'线路 '+(index+1),episodes});});
+    $('.stui-content__playlist,.myui-content__playlist,.play_list,.playlist,.play-list,.module-play-list,.numList ul').slice(0,30).each((index,e)=>{const episodes=$(e).find('a[href]').slice(0,2000).map((_,a)=>({name:trim($(a).text()),id:webUrl($(a).attr('href'),url)})).get();if(episodes.length)result.lines.push({name:trim($('.stui-pannel__head h3,.myui-panel__head h3,.tab_control li,.play-tab li').eq(index).text())||'线路 '+(index+1),episodes});});
   }
   if(!title||!result.lines.some(l=>l.episodes.length))throw new Error('未找到剧集，站点页面结构可能变化');
   return result;
@@ -112,29 +124,71 @@ async function resolve(site,episode,signal){
     return {url:{values,position:values.length-1},parse:0,inheritHeaders:false,header:{'user-agent':UA}};
   }
   let found;
-  try{found=await resolvePage(site,episode.id,signal);}catch(error){if(!site.browser)throw error;found=await site.browser.run(webUrl(episode.id,site.api),{media:true,signal});}
+  try{found=await resolvePage(site,episode.id,signal);}catch(error){
+    if(error.status===428||error.code==='SOURCE_REGION_BLOCKED'||!site.browser)throw error;
+    found=await site.browser.run(error.playerUrl||webUrl(episode.id,site.api),{media:true,signal,...(error.playerReferer?{headers:{referer:error.playerReferer}}:{})});
+  }
   // NewCz's external image/TS CDN rejects the catalog/player Referer and Origin.
   // Catalog requests keep their own headers; only the public media request changes.
   if(site.adapter==='newcz'&&new URL(found.url).origin!==new URL(site.api).origin)return {...found,inheritHeaders:false,header:{'user-agent':UA}};
   return found;
 }
+function macV8Media(html,url){
+  const m=/\bmac_url\s*=\s*(['"])([\s\S]*?)\1/.exec(html);
+  if(!m)return '';
+  const groups=m[2].split('$$$');
+  const srcIndex=Math.max(0,(Number(/src-(\d+)/i.exec(url)?.[1])||1)-1);
+  const numIndex=Math.max(0,(Number(/num-(\d+)/i.exec(url)?.[1])||1)-1);
+  const episodes=(groups[srcIndex]||groups[0]||'').split('#').filter(Boolean);
+  const entry=episodes[numIndex]||episodes[0]||'';
+  const sep=entry.indexOf('$');
+  const candidate=(sep>=0?entry.slice(sep+1):entry).trim();
+  return media(candidate)?candidate:'';
+}
+async function macPlayerParseUrl(site,$,baseUrl,from,signal){
+  if(!from)return '';
+  const scriptSrc=$('script[src*="playerconfig.js"]').first().attr('src');
+  if(!scriptSrc)return '';
+  const configUrl=webUrl(scriptSrc,baseUrl);
+  site._playerLists ||= new Map();
+  let list=site._playerLists.get(configUrl);
+  if(!list){
+    try{
+      const js=(await resource(configUrl,{headers:site.headers,signal,timeout:8000,limit:512*1024})).text;
+      list=scriptObject(js,/MacPlayerConfig\.player_list\s*=/)||{};
+      site._playerLists.set(configUrl,list);
+    }catch{list={};}
+  }
+  const parse=list?.[from]?.parse;
+  return typeof parse==='string'&&/^https?:\/\//i.test(parse)?parse:'';
+}
 async function resolvePage(site,address,signal){
-  const visited=new Set();let next=webUrl(address,site.api),referer=site.api,origin='';
+  const visited=new Set();let next=webUrl(address,site.api),referer=site.api,origin='',playerUrl='',playerReferer='';
   for(let depth=0;depth<4;depth++){
     if(media(next))return {url:next,parse:0,header:{...site.headers,referer,...(origin?{origin}:{})}};
     if(visited.has(next))break;visited.add(next);
     const response=await page(site,next,signal),{$}=response;referer=response.url;
     const type=String(response.headers['content-type']||'');
     if(/mpegurl|video\/|audio\//i.test(type)||/^\s*#EXTM3U/.test(response.text))return {url:response.url,parse:0,type:/mpegurl|#EXTM3U/i.test(type+' '+response.text.slice(0,20))?'hls':'',header:site.headers};
+    const macV8=macV8Media(response.text,response.url);
+    if(macV8)return {url:webUrl(macV8,response.url),parse:0,inheritHeaders:false,header:{'user-agent':UA}};
     let found=$('video[src],source[src]').first().attr('src');
     const player=scriptObject(response.text,/var\s+player_\w+\s*=/);
-    if(!found&&player?.url){found=String(player.url);if(Number(player.encrypt)===2)found=Buffer.from(found,'base64').toString('utf8');if([1,2].includes(Number(player.encrypt)))try{found=decodeURIComponent(found);}catch{}}
+    if(!found&&player?.url){
+      found=String(player.url);
+      if(Number(player.encrypt)===2)found=Buffer.from(found,'base64').toString('utf8');
+      if([1,2].includes(Number(player.encrypt)))try{found=decodeURIComponent(found);}catch{}
+      if(!/^(?:https?:)?\/\/|^\//i.test(found)&&player.from){
+        const parsePrefix=await macPlayerParseUrl(site,$,response.url,String(player.from),signal);
+        if(parsePrefix){found=parsePrefix+found;playerUrl=found;playerReferer=response.url;}else found='';
+      }
+    }
     const configured = !found && artplayerMedia(response.text);
     if(configured)return {url:webUrl(configured.url,response.url),parse:0,type:configured.type,header:{...site.headers,referer,...(origin?{origin}:{})}};
-    if(!found){const frame=$('iframe[src]').first().attr('src');if(frame){const u=new URL(frame,response.url),value=u.searchParams.get('url')||u.searchParams.get('v');found=media(value)?value:u.href;origin=u.origin;if(media(value))referer=u.origin+'/';}}
+    if(!found){const frame=$('iframe[src]').first().attr('src');if(frame){const u=new URL(frame,response.url),value=u.searchParams.get('url')||u.searchParams.get('v');found=media(value)?value:u.href;origin=u.origin;if(media(value))referer=u.origin+'/';else{playerUrl=u.href;playerReferer=response.url;}}}
     if(!found)found=/(?:url|src|file)\s*[:=]\s*['"](https?:[^'"\r\n]+\.(?:m3u8|mp4)(?:\?[^'"\r\n]*)?)['"]/i.exec(response.text.replace(/\\\//g,'/'))?.[1];
     if(!found)break;next=webUrl(found,response.url);
   }
-  throw new Error('该线路需要浏览器解析或登录验证，未读到媒体地址');
+  throw Object.assign(new Error('该线路需要浏览器解析或登录验证，未读到媒体地址'),{...(playerUrl?{playerUrl,playerReferer}:{})});
 }
 module.exports={describe,list,detail,resolve,resolvePage,encodePlayKey,artplayerMedia};

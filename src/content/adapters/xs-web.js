@@ -23,8 +23,8 @@ function describe(raw, base) {
 async function page(site, address, signal) {
   const url = webUrl(address, site.api);
   let r;
-  try { r = await resource(url, { headers:site.headers, signal, timeout:12000, limit:4*1024*1024 }); }
-  catch (error) { if (error.code==='SOURCE_REGION_BLOCKED' || !site.browser || !/403|503/.test(error.message)) throw error; r = await site.browser.run(url,{signal}); }
+  try { r = await resource(url, { headers:site.headers, signal, timeout:15000, limit:4*1024*1024 }); }
+  catch (error) { if (error.status===428 || error.code==='SOURCE_REGION_BLOCKED' || !site.browser || !/403|503/.test(error.message)) throw error; r = await site.browser.run(url,{signal}); }
   return { ...r, $:cheerio.load(r.text) };
 }
 function cards($, selector, base) {
@@ -111,6 +111,6 @@ async function resolve(site,episode,signal) {
     const result=json((await postResource(webUrl('/play/music',site.api),new URLSearchParams({id:episode.id}).toString(),{headers:site.headers,contentType:'application/x-www-form-urlencoded',signal})).text);
     if(!result.data?.url)throw new Error('音乐接口未返回播放地址');return {url:webUrl(result.data.url),parse:0,header:site.headers};
   }
-  try {return await resolvePage(site,webUrl(episode.id,site.api),signal);} catch(error) {if(!site.browser||signal?.aborted)throw error;return site.browser.run(webUrl(episode.id,site.api),{media:true,signal});}
+  try {return await resolvePage(site,webUrl(episode.id,site.api),signal);} catch(error) {if(error.status===428||error.code==='SOURCE_REGION_BLOCKED'||!site.browser||signal?.aborted)throw error;return site.browser.run(error.playerUrl||webUrl(episode.id,site.api),{media:true,signal,...(error.playerReferer?{headers:{referer:error.playerReferer}}:{})});}
 }
 module.exports={describe,list,detail,resolve,tokenFor,pathFor,cards};

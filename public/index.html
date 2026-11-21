@@ -55,13 +55,15 @@
     </section>
     <div class="library-browse-bar"><nav class="library-shelves" aria-label="我的片库"><button type="button" class="active" data-library-shelf="browse" aria-pressed="true">浏览</button><button type="button" data-library-shelf="history" aria-pressed="false">播放历史 <span id="libraryHistoryCount">0</span></button><button type="button" data-library-shelf="favorites" aria-pressed="false">收藏 <span id="libraryFavoriteCount">0</span></button></nav><button type="button" class="text-button" id="libraryRetry">刷新</button></div>
     <div class="library-status-row"><p class="library-status" id="libraryStatus" role="status" aria-live="polite">导入自己的配置后，在电脑浏览和播放。</p><button type="button" class="btn" id="libraryVerify" hidden>打开验证页面</button><button type="button" class="btn" id="libraryVerifyRetry" hidden>重试</button></div>
-    <section id="libraryCollection" aria-label="历史与收藏" hidden><div class="collection-heading"><p id="libraryCollectionNote"></p><button type="button" class="text-button" id="libraryClearHistory" hidden>清空历史</button></div><div class="collection-grid" id="libraryCollectionList"></div></section>
+    <section id="libraryCollection" aria-label="历史与收藏" hidden><div class="collection-heading"><p id="libraryCollectionNote"></p><div class="collection-tools"><input class="input-box collection-search" id="libraryCollectionSearch" type="search" maxlength="100" placeholder="搜索历史记录（片名 / 集数 / 频道）" aria-label="搜索历史与收藏" /><button type="button" class="text-button" id="libraryClearHistory" hidden>清空历史</button></div></div><div class="collection-grid" id="libraryCollectionList"></div></section>
     <section id="libraryVod" aria-label="点播片库">
       <div class="library-toolbar vod-toolbar">
         <label class="library-source-choice"><span>浏览片源</span><select class="library-select" id="librarySite" aria-label="点播站点"></select></label>
         <form class="library-search" id="librarySearchForm"><input class="input-box" id="librarySearch" type="search" maxlength="200" placeholder="输入片名、演员，按 Enter 搜索" aria-label="搜索片名或演员" /><label class="library-search-scope"><input id="librarySearchAll" type="checkbox" />搜索全部片源</label><button type="submit" class="btn btn-primary">搜索</button><button type="button" class="btn" id="libraryCancelSearch" hidden>停止</button></form>
       </div>
+      <div class="search-history" id="librarySearchHistory" aria-label="最近搜索" hidden><span class="search-history-label">最近搜索</span><div class="search-history-list" id="librarySearchHistoryList"></div><button type="button" class="text-button" id="libraryClearSearchHistory">清空</button></div>
       <div class="library-search-context"><p id="librarySearchHint"></p><button class="text-button" type="button" id="libraryResetSearch" hidden>返回推荐</button></div>
+      <nav class="search-source-tabs" id="librarySearchSources" aria-label="按片源筛选搜索结果" hidden></nav>
       <nav class="library-categories" id="libraryCategories" aria-label="影片分类"></nav>
       <div class="library-filter-row" id="libraryFilters" hidden></div>
       <div class="library-filter-row schedule-filters" id="libraryScheduleFilters" hidden><label>比赛日期<select class="library-select" id="libraryMatchDate" aria-label="比赛日期"><option value="">全部日期</option></select></label><label>比赛状态<select class="library-select" id="libraryMatchStatus" aria-label="比赛状态"><option value="">全部状态</option><option value="live">直播中</option><option value="upcoming">未开始</option><option value="finished">已结束</option></select></label><span>同日直播优先，再按开赛时间排列</span></div>
@@ -89,6 +91,7 @@
   <dialog class="app-dialog library-matches" id="libraryMatches" aria-labelledby="libraryMatchesTitle">
     <div class="dialog-heading"><div><h2 id="libraryMatchesTitle">查找片源</h2><p class="field-hint">选择片源查看选集，关闭后继续浏览推荐。</p></div><button type="button" class="icon-btn" id="libraryCloseMatches" aria-label="关闭片源结果"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div>
     <div class="library-matches-status"><p id="libraryMatchesStatus" role="status" aria-live="polite"></p><button class="text-button" type="button" id="libraryMatchesCancel" hidden>停止搜索</button><button class="text-button" type="button" id="libraryMatchesRetry" hidden>重新搜索</button></div>
+    <nav class="search-source-tabs matches-source-tabs" id="libraryMatchesSources" aria-label="按片源筛选结果" hidden></nav>
     <div class="library-matches-scroll" tabindex="0" role="region" aria-label="滚动浏览片源结果"><div class="vod-grid" id="libraryMatchesResults" aria-label="推荐影片的片源结果"></div></div>
   </dialog>
   <dialog class="app-dialog library-detail" id="libraryDetail" aria-labelledby="libraryDetailTitle">

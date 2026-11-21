@@ -8,6 +8,8 @@ async function run(){
     if(url.pathname==='/parse'){parserCalls++;assert.equal(url.searchParams.get('url'),base+'/media.mp4');res.end(JSON.stringify({url:base+'/parsed.m3u8',ua:'ParsedPlayer/1',referer:'https://player.example/'}));return;}
     if(url.pathname==='/multi'){res.end(JSON.stringify({url:['SD',base+'/sd.mp4','HD',base+'/hd.mp4']}));return;}
     if(url.pathname==='/opaque'){res.setHeader('Content-Type','application/octet-stream');res.end('#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6,\nsegment.ts\n#EXT-X-ENDLIST');return;}
+    if(url.pathname==='/opaque-mkv'){res.setHeader('Content-Type','application/octet-stream');res.end(Buffer.concat([Buffer.from([0x1a,0x45,0xdf,0xa3,0x93,0x42,0x82,0x88]),Buffer.from('matroska')]));return;}
+    if(url.pathname==='/opaque-webm'){res.setHeader('Content-Type','application/octet-stream');res.end(Buffer.concat([Buffer.from([0x1a,0x45,0xdf,0xa3,0x8f,0x42,0x82,0x84]),Buffer.from('webm')]));return;}
     if(url.pathname==='/framed'){res.setHeader('Content-Type','text/html');res.end('<iframe src="'+base+'/frame?url='+encodeURIComponent(base+'/media.mp4')+'"></iframe>');return;}
     if(url.pathname==='/json-prefix'){assert.equal(url.searchParams.get('url'),'opaque-title');res.end(JSON.stringify({data:{url:base+'/prefix.m3u8',header:JSON.stringify({UA:'PrefixPlayer/1'})}}));return;}
     if(url.pathname==='/xml'){assert.equal(url.searchParams.get('ac'),'videolist');res.setHeader('Content-Type','text/xml');res.end('<rss><list page="1" pagecount="2"><video><id>1</id><name>XML fixture</name><dl><dd flag="main">One$'+base+'/a.mp4</dd></dl></video></list></rss>');return;}
@@ -27,6 +29,10 @@ async function run(){
     const named=await resolvePlayback(site,{url:base+'/media.mp4',playUrl:'parse:Named',parse:1},{parsers:[{key:'named',name:'Named',type:1,url:base+'/parse?url='}]});assert.equal(named.url,base+'/parsed.m3u8');
     const multi=await resolvePlayback(site,{url:base+'/media.mp4'},{parsers:[{key:'multi',type:1,url:base+'/multi?url='}],parserKey:'multi',quality:1});assert.equal(multi.url,base+'/hd.mp4');assert.deepEqual(multi.qualities,['SD','HD']);assert.equal(multi.quality,1);
     const extensionless=await resolvePlayback(site,{url:base+'/opaque',parse:0});assert.equal(extensionless.mimeType,'application/vnd.apple.mpegurl');
+    assert.equal((await resolvePlayback(site,{url:base+'/movie.mkv',parse:0})).mimeType,'video/x-matroska');
+    assert.equal((await resolvePlayback(site,{url:base+'/opaque-mkv',parse:0})).mimeType,'video/x-matroska');
+    assert.equal((await resolvePlayback(site,{url:base+'/opaque-webm',parse:0})).mimeType,'video/webm');
+    assert.equal((await resolvePlayback(site,{url:'/api/library/torrent/deadbeef/0/stream.mkv',localUrl:true,parse:0})).mimeType,'video/x-matroska');
     const framed=await resolvePlayback(site,{url:base+'/framed',parse:1});assert.equal(framed.headers.referer,base+'/');assert.equal(framed.headers.origin,base,'Embedded media inherits the player frame origin rather than the catalog page');
     const api=catalog.describeSite({api:base+'/api4',type:4,ext:'{"fixture":true}'},base,0);await catalog.category(api,{id:'1',filters:{area:'CN',year:'2026'}});const request=seen.find(r=>r.path==='/api4');assert.equal(request.query.get('extend'),'{"fixture":true}');assert.deepEqual(JSON.parse(Buffer.from(request.query.get('ext'),'base64url').toString()),{area:'CN',year:'2026'});
     const played=await catalog.resolve(api,{name:'main'},{id:'opaque-title'},[],'');assert.equal(played.url,base+'/hd.mp4');assert.equal(played.headers['user-agent'],'NativePlayer/1');assert.equal(played.mimeType,'video/mp4');assert.deepEqual(played.qualities,['SD','HD']);

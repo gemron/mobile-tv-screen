@@ -54,6 +54,13 @@ async function run() {
     }).then(value => { finished = true; return value; });
     const partial = await early; assert.equal(finished, false); assert.equal(partial.list[0].siteKey, 'cloud'); assert.equal(partial.list[0].lines, undefined);
     release(); assert.equal((await pending).list.length, 2);
+    // Verify multi-source search runs with >3 concurrent workers (default 6).
+    let inflight = 0, peakInflight = 0;
+    const manySites = Array.from({ length: 6 }, (_, i) => ({ key: 's' + i, name: 'S' + i, supported: true }));
+    await searchSources(manySites, 'parallel', {
+      query: async site => { inflight++; peakInflight = Math.max(peakInflight, inflight); await new Promise(r => setTimeout(r, 40)); inflight--; return { list: [{ id: site.key + '-1', title: 'parallel' }] }; },
+    });
+    assert.ok(peakInflight >= 5, 'Multi-source search executes concurrently across sources (peak=' + peakInflight + ')');
     const controller = new AbortController(); let aborted = false;
     const cancelled = searchSources([cloudSite], 'fixture', { signal: controller.signal, query: (_, options, signal) => new Promise((resolve, reject) => { signal.addEventListener('abort', () => { aborted = true; reject(signal.reason); }, { once: true }); }) });
     controller.abort(); await assert.rejects(cancelled, error => error.name === 'AbortError'); assert.equal(aborted, true);

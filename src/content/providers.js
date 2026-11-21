@@ -25,5 +25,21 @@ module.exports = {
   async list(site, options, signal) { await syncCookies(site); return provider(site).list(site, options, signal); },
   async detail(site, id, signal) { await syncCookies(site); return provider(site).detail(site, id, signal); },
   async resolve(site, episode, signal) { await syncCookies(site); return provider(site).resolve(site, episode, signal); },
+  syncCookies,
 };
-async function syncCookies(site) { if(site.browser){const cookies=await site.browser.cookies(site.api);if(cookies)site.headers.cookie=cookies;} }
+async function syncCookies(site, targetUrl = site?.api) {
+  if (!site?.browser || !targetUrl || !/^https?:/i.test(String(targetUrl))) return;
+  site.headers ||= {};
+  let session = null;
+  if (typeof site.browser.sessionFor === 'function') session = await site.browser.sessionFor(targetUrl);
+  else if (typeof site.browser.cookies === 'function') {
+    const cookie = await site.browser.cookies(targetUrl);
+    if (cookie) session = { cookie, userAgent: '' };
+  }
+  if (!session?.cookie) return;
+  if (!site.cookieOverride) site.headers.cookie = session.cookie;
+  const currentUa = String(site.headers['user-agent'] || '');
+  if (session.userAgent && !site.fixedUserAgent && !/^okhttp\//i.test(currentUa)) {
+    site.headers['user-agent'] = session.userAgent;
+  }
+}

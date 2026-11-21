@@ -123,7 +123,7 @@
     finally { $('libraryImport').disabled = false; }
   }
 
-  function resetSourceView() { begin(); state.channels = []; state.category = ''; state.keyword = ''; state.filters = {}; state.verifyUrl = ''; state.drawerSource = ''; $('librarySearch').value = ''; $('librarySourceName').value = ''; state.shelf = 'browse'; renderShelf(); }
+  function resetSourceView() { begin(); state.channels = []; state.category = ''; state.keyword = ''; state.filters = {}; state.verifyUrl = ''; state.drawerSource = ''; state.searchData = null; state.searchSourceTab = 'top1'; $('librarySearchSources').hidden = true; $('librarySearch').value = ''; $('librarySourceName').value = ''; state.shelf = 'browse'; renderShelf(); }
   async function switchSource(id) {
     $('librarySavedSource').disabled = true;
     try { const config = await api('/sources/select', { id }); renderConfig(config); resetSourceView(); if (state.mode === 'live') await loadChannels(); else await loadHome(); }
@@ -152,16 +152,37 @@
   function renderShelf() {
     $('libraryVod').hidden = state.mode !== 'vod' || state.shelf !== 'browse'; $('libraryLive').hidden = state.mode !== 'live' || state.shelf !== 'browse'; $('libraryCollection').hidden = state.shelf === 'browse';
     for (const button of document.querySelectorAll('[data-library-shelf]')) { const active = button.dataset.libraryShelf === state.shelf; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
-    if (state.shelf !== 'browse') renderCollection();
+    if (state.shelf !== 'browse') {
+      if (state.collectionShelf !== state.shelf) { state.collectionShelf = state.shelf; state.collectionQuery = ''; $('libraryCollectionSearch').value = ''; }
+      renderCollection();
+    }
   }
   const timeLabel = seconds => { seconds = Math.floor(Number(seconds) || 0); return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`; };
   function renderCollection() {
     const focusedId = document.activeElement?.dataset?.collectionId;
     const history = state.shelf === 'history', list = state.collection[history ? 'history' : 'favorites'];
-    $('libraryCollectionNote').textContent = history ? '保留最近 200 条记录 · 点击继续观看' : '影片与频道收藏 · 仅保存在本机'; $('libraryClearHistory').hidden = !history || !list.length;
+    const rawQuery = String(state.collectionQuery || '').trim(), terms = rawQuery ? rawQuery.toLowerCase().split(/\s+/).filter(Boolean) : [];
+    const searchInput = $('libraryCollectionSearch');
+    searchInput.placeholder = history ? '搜索历史记录（片名 / 集数 / 频道）' : '搜索收藏（片名 / 频道）';
+    searchInput.hidden = !list.length && !rawQuery;
+    const filtered = terms.length ? list.filter(item => {
+      const source = state.config?.sources?.find(s => s.id === item.sourceId);
+      const site = state.config?.sites?.find(s => s.key === item.siteKey);
+      const hay = [item.title, item.episode, item.lineName, item.group, site?.name, source?.name, item.kind === 'live' ? '直播' : ''].filter(Boolean).join(' ').toLowerCase();
+      return terms.every(term => hay.includes(term));
+    }) : list;
+    $('libraryCollectionNote').textContent = terms.length
+      ? `找到 ${filtered.length} / ${list.length} 条${history ? '播放记录' : '收藏'}`
+      : history ? '保留最近 200 条记录 · 点击继续观看' : '影片与频道收藏 · 仅保存在本机';
+    $('libraryClearHistory').hidden = !history || !list.length;
     $('libraryCollectionList').replaceChildren();
-    if (!list.length) { $('libraryCollectionList').append(node('div', 'library-empty', history ? '还没有播放记录，开始观看后会自动保留进度。' : '还没有收藏，可在影片详情或频道旁点击 ☆。')); return; }
-    for (const item of list) {
+    if (!filtered.length) {
+      $('libraryCollectionList').append(node('div', 'library-empty', terms.length
+        ? `没有匹配“${rawQuery}”的${history ? '播放记录' : '收藏'}。`
+        : history ? '还没有播放记录，开始观看后会自动保留进度。' : '还没有收藏，可在影片详情或频道旁点击 ☆。'));
+      return;
+    }
+    for (const item of filtered) {
       const card = node('article', 'collection-card'), open = node('button', 'collection-open'), body = node('div', 'collection-info'), picture = artworkUrl(item.picture), poster = node('div', 'collection-poster', item.kind === 'live' ? 'TV' : '▶');
       open.type = 'button'; open.dataset.collectionId = item.id;
       if (picture) { const image = node('img'); image.alt = ''; image.loading = 'lazy'; image.referrerPolicy = 'no-referrer'; image.src = picture; image.addEventListener('error', () => image.remove()); poster.replaceChildren(image); }
@@ -303,40 +324,91 @@
     const count=$('libraryMatchesResults').querySelectorAll('.vod-card').length;$('libraryMatchesStatus').textContent=`已停止搜索 · ${count} 个片源结果`;$('libraryMatchesRetry').hidden=false;
     if(!count)$('libraryMatchesResults').replaceChildren(node('div','library-empty','搜索已停止，可重新搜索，或关闭后查看其他推荐。'));
   }
+  function applyMultiSourceView(data, matches = false) {
+    if (matches) state.matchData = data; else state.searchData = data;
+    const rawList = Array.isArray(data.list) ? data.list : [];
+    const groupMap = new Map();
+    for (const item of rawList) {
+      const key = item.siteKey || '';
+      let group = groupMap.get(key);
+      if (!group) { group = { key, name: item.sourceName || key || '片源', items: [] }; groupMap.set(key, group); }
+      group.items.push(item);
+    }
+    const groups = [...groupMap.values()];
+    const top1 = groups.map(group => group.items[0]);
+    let tab = matches ? (state.matchSourceTab || 'top1') : (state.searchSourceTab || 'top1');
+    if (tab !== 'top1' && tab !== 'all' && !groupMap.has(tab)) tab = 'top1';
+    if (matches) state.matchSourceTab = tab; else state.searchSourceTab = tab;
+    const tabsEl = $(matches ? 'libraryMatchesSources' : 'librarySearchSources');
+    if (tabsEl) {
+      tabsEl.replaceChildren();
+      tabsEl.hidden = !groups.length;
+      if (groups.length) {
+        const tabs = [
+          { key: 'top1', label: `聚合 · 每源前1 (${top1.length})` },
+          { key: 'all', label: `全部 (${rawList.length})` },
+          ...groups.map(group => ({ key: group.key, label: `${group.name} (${group.items.length})` })),
+        ];
+        for (const entry of tabs) {
+          const btn = node('button', 'category-pill' + (tab === entry.key ? ' active' : ''), entry.label);
+          btn.type = 'button';
+          btn.dataset.sourceTab = entry.key;
+          btn.setAttribute('aria-pressed', String(tab === entry.key));
+          btn.addEventListener('click', () => {
+            if (matches) state.matchSourceTab = entry.key; else state.searchSourceTab = entry.key;
+            applyMultiSourceView(matches ? state.matchData : state.searchData, matches);
+          });
+          tabsEl.append(btn);
+        }
+      }
+    }
+    const activeGroup = groupMap.get(tab);
+    const list = tab === 'top1' ? top1 : tab === 'all' ? rawList : (activeGroup?.items || top1);
+    const progress = data.sources ? ` · ${data.completed}/${data.sources} 源` : '';
+    const notice = tab === 'top1'
+      ? `${data.done ? '搜索完成' : '并发搜索中'} · 聚合 ${top1.length} 个片源（每源前1，共 ${rawList.length} 条）${progress}`
+      : tab === 'all'
+        ? data.notice
+        : `${activeGroup.name} · ${list.length} 个结果${data.done ? '' : progress}`;
+    renderVideos({ ...data, list, notice }, true, matches);
+  }
   async function openMatches(video,trigger=state.matchTrigger) {
     if (!$('libraryMatches').open) state.matchView = captureBrowseView(trigger);
     state.matchSearch?.controller.abort();state.matchVideo=video;state.matchTrigger=trigger;
+    state.matchData = null; state.matchSourceTab = 'top1'; $('libraryMatchesSources').hidden = true; $('libraryMatchesSources').replaceChildren();
     const request=state.matchSearch={controller:new AbortController()},dialog=$('libraryMatches'),current=()=>state.matchSearch===request&&dialog.open&&!request.controller.signal.aborted;
     $('libraryMatchesTitle').textContent=video.searchTitle+' · 片源';$('libraryMatchesResults').replaceChildren(node('div','library-empty','正在查找可播放片源…'));
-    $('libraryMatchesStatus').classList.remove('error');$('libraryMatchesStatus').textContent='有结果后即可选择，不必等待全部完成。';$('libraryMatchesCancel').hidden=false;$('libraryMatchesRetry').hidden=true;dialog.setAttribute('aria-busy','true');if(!dialog.open)dialog.showModal();
-    try{await streamSources(video.searchTitle,request.controller.signal,current,data=>renderVideos(data,true,true));}
+    $('libraryMatchesStatus').classList.remove('error');$('libraryMatchesStatus').textContent='多片源并发搜索中，有结果后即可选择。';$('libraryMatchesCancel').hidden=false;$('libraryMatchesRetry').hidden=true;dialog.setAttribute('aria-busy','true');if(!dialog.open)dialog.showModal();
+    try{await streamSources(video.searchTitle,request.controller.signal,current,data=>applyMultiSourceView(data,true));}
     catch(error){if(current()&&error.name!=='AbortError'){$('libraryMatchesStatus').textContent=error.message;$('libraryMatchesStatus').classList.add('error');if(!$('libraryMatchesResults').querySelector('.vod-card'))$('libraryMatchesResults').replaceChildren(node('div','library-empty','暂未取得片源，可重新搜索或关闭后查看其他推荐。'));}}
     finally{if(state.matchSearch===request){dialog.setAttribute('aria-busy','false');$('libraryMatchesCancel').hidden=true;$('libraryMatchesRetry').hidden=false;}}
   }
   async function searchSources(title) {
     title = String(title || '').trim(); if (!title) { $('librarySearch').focus(); return; }
     const request = begin(); state.keyword = title; state.category = ''; state.filters = {};
+    state.searchData = null; state.searchSourceTab = 'top1'; $('librarySearchSources').hidden = true; $('librarySearchSources').replaceChildren();
     $('librarySearch').value = title; $('librarySearchAll').checked = true; $('libraryFilters').hidden = true;
     syncSearchUi();
-    placeholder('正在搜索片源…'); status('正在搜索片源，有结果后即可选择播放。'); $('libraryCancelSearch').hidden = false;
+    placeholder('正在并发搜索多个片源…'); status('正在并发搜索片源，按片源聚合首条结果，也可按片源分开查看。'); $('libraryCancelSearch').hidden = false;
     try {
-      await streamSources(title,request.signal,()=>request.id===state.request,data=>renderVideos(data,true));
+      await streamSources(title,request.signal,()=>request.id===state.request,data=>applyMultiSourceView(data,false));
     } catch (error) { if (request.id === state.request) report(error); }
     finally { if (request.id === state.request) $('libraryCancelSearch').hidden = true; }
   }
 
-  async function loadHome() {
+  async function loadHome(refresh = false) {
     if (!state.site) return;
-    const request = begin(); state.category = ''; state.keyword = ''; state.page = 1; status('正在加载影片…'); placeholder('正在加载…');
+    const request = begin(); state.category = ''; state.keyword = ''; state.page = 1; state.searchData = null; state.searchSourceTab = 'top1'; $('librarySearchSources').hidden = true; $('librarySearchSources').replaceChildren(); status('正在加载影片…'); placeholder('正在加载…');
     syncSearchUi();
     $('libraryCategories').replaceChildren(); state.filterDefinitions = {}; state.filters = {}; renderFilters();
-    try { const data = await api('/home?site=' + encodeURIComponent(state.site), undefined, request.signal); if (request.id !== state.request) return; state.filterDefinitions = data.filters || {}; state.filters = {}; renderCategories(data.classes); renderFilters(); renderVideos(data); }
-    catch (error) { if (request.id === state.request && error.name !== 'AbortError') { placeholder(error.code==='SOURCE_REGION_BLOCKED'?'当前地区无法访问此站点，请切换其他片源。':'站点暂时没有响应，可切换其他站点或重试。'); report(error); } }
+    try { const data = await api('/home?site=' + encodeURIComponent(state.site) + (refresh ? '&refresh=1' : ''), undefined, request.signal); if (request.id !== state.request) return; state.filterDefinitions = data.filters || {}; state.filters = {}; renderCategories(data.classes); renderFilters(); renderVideos(data); }
+    catch (error) { if (request.id === state.request && error.name !== 'AbortError') { placeholder(error.code==='SOURCE_REGION_BLOCKED'?'当前地区无法访问此站点，请切换其他片源。':error.verifyUrl?'此站点需要完成人机验证或登录，请点击上方“打开验证页面”完成后再点击“重试”。':'站点暂时没有响应，可切换其他站点或重试。'); report(error); } }
   }
-  async function loadList(page) {
+  async function loadList(page, refresh = false) {
+    state.searchData = null; state.searchSourceTab = 'top1'; $('librarySearchSources').hidden = true; $('librarySearchSources').replaceChildren();
     syncSearchUi();
     const request = begin(); status('正在读取列表…');
-    try { const query = new URLSearchParams({ site: state.site, category: state.category, keyword: state.keyword, page: String(page), filters: JSON.stringify(state.filters) }); const data = await api('/list?' + query, undefined, request.signal); if (request.id === state.request) renderVideos(data); }
+    try { const query = new URLSearchParams({ site: state.site, category: state.category, keyword: state.keyword, page: String(page), filters: JSON.stringify(state.filters), ...(refresh ? { refresh: '1' } : {}) }); const data = await api('/list?' + query, undefined, request.signal); if (request.id === state.request) renderVideos(data); }
     catch (error) { if (request.id === state.request) report(error); }
   }
 
@@ -543,9 +615,15 @@
   $('librarySavedSource').addEventListener('change', () => switchSource($('librarySavedSource').value));
   $('libraryManageSources').addEventListener('click', () => { $('librarySourceStatus').textContent = ''; $('librarySourcesDialog').showModal(); });
   $('libraryCloseSources').addEventListener('click', () => $('librarySourcesDialog').close());
+  const retryCurrentView = () => {
+    if (state.mode === 'live') return loadChannels(true);
+    if (state.keyword) return $('librarySearchAll').checked ? searchSources(state.keyword) : loadList(state.page || 1, true);
+    if (state.category) return loadList(state.page || 1, true);
+    return loadHome(true);
+  };
   $('libraryVerify').addEventListener('click', async () => { try { await api('/browser/open', { siteKey: state.site, verifyUrl: state.verifyUrl }); toast('完成验证或登录后，点击“重试”。'); } catch (error) { toast(error.message); } });
-  $('libraryVerifyRetry').addEventListener('click', () => state.mode === 'live' ? loadChannels(true) : loadHome());
-  $('libraryClearHistory').addEventListener('click', async () => { try { state.collection = await api('/collection/remove', { kind: 'history', clear: true }); renderCollectionCounts(); renderCollection(); } catch (error) { toast(error.message); } });
+  $('libraryVerifyRetry').addEventListener('click', retryCurrentView);
+  $('libraryClearHistory').addEventListener('click', async () => { try { state.collection = await api('/collection/remove', { kind: 'history', clear: true }); state.collectionQuery = ''; $('libraryCollectionSearch').value = ''; renderCollectionCounts(); renderCollection(); } catch (error) { toast(error.message); } });
   $('libraryDetailFavorite').addEventListener('click', event => toggleFavorite({ kind: 'vod', siteKey: state.detailSite || state.site, vodId: state.detail?.id }, event.currentTarget));
   $('libraryPlayerFavorite').addEventListener('click', event => toggleFavorite(currentPlayback(), event.currentTarget));
   $('libraryLiveFavorites').addEventListener('click', () => { state.liveFavorites = !state.liveFavorites; $('libraryLiveFavorites').setAttribute('aria-pressed', String(state.liveFavorites)); renderChannels(); });
@@ -560,7 +638,7 @@
   });
   document.addEventListener('pointerdown', event => { if (!$('libraryChannelDrawer').hidden && !event.target.closest('#libraryChannelDrawer, #libraryChannelToggle')) toggleChannels(false); });
   $('librarySourceForm').addEventListener('submit', event => { event.preventDefault(); importSource($('librarySourceUrl').value); });
-  $('libraryRetry').addEventListener('click', () => state.mode === 'live' ? loadChannels(true) : loadHome());
+  $('libraryRetry').addEventListener('click', retryCurrentView);
   $('librarySiteBrowser').addEventListener('click', async () => { if (!state.site) return; try { await api('/browser/open', { siteKey: state.site, verifyUrl:state.verifyUrl||'' }); status('已打开独立站点浏览器，完成验证或登录后点击“重试”。'); } catch(error) { report(error); } });
   $('librarySiteSettings').addEventListener('click', async () => {
     if (!state.site) return;
@@ -601,9 +679,48 @@
     event.preventDefault(); const body = { siteKey: state.site, endpoint: $('libraryEndpoint').value.trim() }; if ($('libraryRemoveCookie').checked) body.cookie = ''; else if ($('libraryCookie').value.trim()) body.cookie = $('libraryCookie').value.trim();
     try { await api('/site/settings', body); $('librarySettingsDialog').close(); status('设置已保存'); loadHome(); } catch(error) { $('librarySettingsStatus').textContent = error.message; }
   });
+  const SEARCH_HISTORY_KEY = 'mobiletv-search-history';
+  function loadSearchHistory() {
+    try { const parsed = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) || '[]'); return Array.isArray(parsed) ? parsed.filter(v => typeof v === 'string' && v.trim()).slice(0, 16) : []; }
+    catch { return []; }
+  }
+  function saveSearchHistory(items) {
+    state.searchHistory = items.slice(0, 16);
+    try { localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(state.searchHistory)); } catch {}
+    renderSearchHistory();
+  }
+  function recordSearchHistory(keyword) {
+    const term = String(keyword || '').trim().slice(0, 80);
+    if (!term) return;
+    const list = (state.searchHistory || loadSearchHistory()).filter(item => item.toLowerCase() !== term.toLowerCase());
+    list.unshift(term);
+    saveSearchHistory(list);
+  }
+  function renderSearchHistory() {
+    const list = state.searchHistory || [];
+    const wrap = $('librarySearchHistory'), target = $('librarySearchHistoryList');
+    if (!wrap || !target) return;
+    wrap.hidden = !list.length;
+    target.replaceChildren();
+    for (const term of list) {
+      const chip = node('span', 'search-history-item');
+      const use = node('button', 'search-history-term', term); use.type = 'button'; use.title = '搜索：' + term;
+      use.addEventListener('click', () => { $('librarySearch').value = term; submitSearch(); });
+      const del = node('button', 'search-history-del', '×'); del.type = 'button'; del.setAttribute('aria-label', '删除搜索记录：' + term);
+      del.addEventListener('click', () => saveSearchHistory(list.filter(item => item !== term)));
+      chip.append(use, del);
+      target.append(chip);
+    }
+  }
+  state.searchHistory = loadSearchHistory();
+  renderSearchHistory();
+  $('libraryClearSearchHistory').addEventListener('click', () => saveSearchHistory([]));
+  $('libraryCollectionSearch').addEventListener('input', event => { state.collectionQuery = event.target.value; renderCollection(); });
+  $('libraryCollectionSearch').addEventListener('search', event => { state.collectionQuery = event.target.value; renderCollection(); });
   function submitSearch() {
     if(!state.site)return;state.keyword=$('librarySearch').value.trim();state.category='';state.filters={};renderFilters();syncSearchUi();
     if(!state.keyword){loadHome();return;}
+    recordSearchHistory(state.keyword);
     if($('librarySearchAll').checked)searchSources(state.keyword);else loadList(1);
   }
   $('librarySite').addEventListener('change', () => { const searching=Boolean(state.keyword);state.site = $('librarySite').value;state.verifyUrl='';$('librarySearchAll').checked=Boolean(state.config?.sites.find(item=>item.key===state.site)?.discovery);syncSearchUi();if(searching)submitSearch();else loadHome(); });

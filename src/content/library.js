@@ -89,7 +89,7 @@ class Library {
       site.torrents = this.torrents;
       const override = this.overrides?.[site.key];
       if (override?.endpoint) { site.api = override.endpoint; site.endpointOverride = true; site.headers.referer = new URL(override.endpoint).origin + '/'; }
-      if (override?.cookie) site.headers.cookie = override.cookie;
+      if (override?.cookie) { site.headers.cookie = override.cookie; site.cookieOverride = true; }
       site.runtime = this.runtime?.scope(site.adapter || site.implementation, site.api);
     }
     this.liveSources = (document.lives || document.live || []).filter(item => item && typeof item === 'object').slice(0, 200).map((item, index) => {
@@ -158,7 +158,11 @@ class Library {
     this.siteSettings(siteKey);
     const next = {...this.overrides[siteKey]};
     if (endpoint != null) { if (String(endpoint).trim()) next.endpoint = webUrl(endpoint); else delete next.endpoint; }
-    if (cookie != null) { if (String(cookie).length > 16000 || /[\r\n\0]/.test(cookie)) throw failure('Cookie 格式或长度不符合要求'); if(cookie)next.cookie=String(cookie);else delete next.cookie; }
+    if (cookie != null) {
+      if (String(cookie).length > 16000 || /[\r\n\0]/.test(cookie)) throw failure('Cookie 格式或长度不符合要求');
+      if (cookie) next.cookie = String(cookie);
+      else { delete next.cookie; const site = this.sites.find(v => v.key === String(siteKey)); if (site?.api) this.browser?.clearSession?.(site.api); }
+    }
     const overrides = {...this.overrides,[siteKey]:next};
     fs.mkdirSync(path.dirname(this.overridesFile),{recursive:true});
     fs.writeFileSync(this.overridesFile+'.tmp',JSON.stringify(overrides),{encoding:'utf8',mode:0o600});fs.renameSync(this.overridesFile+'.tmp',this.overridesFile);
@@ -227,8 +231,17 @@ class Library {
     return data;
   }
 
-  home(key) { const site = this.site(key); return this.cached('home:' + key, 120000, () => catalog.home(site), /^cloud-/.test(site.adapter || '')); }
-  list(key, options = {}) { const site = this.site(key); return this.cached('list:' + key + JSON.stringify(options), 60000, async () => {const data=await catalog.category(site, options);return options.keyword?{...data,list:require('./search-match').rankResults(data.list,options.keyword)}:data;}, /^cloud-/.test(site.adapter || '')); }
+  invalidateSiteCache(key) {
+    const prefixes = ['home:' + key, 'list:' + key, 'detail:' + key + ':'];
+    for (const [cacheKey, value] of this.cache) {
+      if (prefixes.some(prefix => cacheKey === prefix || cacheKey.startsWith(prefix))) {
+        this.cache.delete(cacheKey);
+        this.cacheBytes -= value.bytes;
+      }
+    }
+  }
+  home(key, refresh = false) { const site = this.site(key); if (refresh) this.invalidateSiteCache(key); return this.cached('home:' + key, 120000, () => catalog.home(site), /^cloud-/.test(site.adapter || '')); }
+  list(key, options = {}, refresh = false) { const site = this.site(key), cacheKey = 'list:' + key + JSON.stringify(options); if (refresh) { const old = this.cache.get(cacheKey); if (old) { this.cacheBytes -= old.bytes; this.cache.delete(cacheKey); } } return this.cached(cacheKey, 60000, async () => {const data=await catalog.category(site, options);return options.keyword?{...data,list:require('./search-match').rankResults(data.list,options.keyword)}:data;}, /^cloud-/.test(site.adapter || '')); }
   detail(key, id, refresh = false, signal) { const site = this.site(key), cacheKey='detail:' + key + ':' + id,cloud=/^cloud-/.test(site.adapter || '');if(refresh){if(cloud)this.invalidateCloudCache();const entry=this.cache.get(cacheKey);if(entry){this.cacheBytes-=entry.bytes;this.cache.delete(cacheKey);}}return this.cached(cacheKey, 300000, () => catalog.detail(site, id, signal), cloud); }
 
   searchAll(keyword, options = {}) {
@@ -298,7 +311,7 @@ class Library {
     const controller = this.playController = new AbortController(), generation = this.generation, cloudGeneration = this.cloudGeneration, previousSession = castState.getSnapshot().sessionId;
     const abort = () => controller.abort(signal.reason);
     signal?.addEventListener('abort', abort, { once: true });
-    const timeout = setTimeout(() => controller.abort(new DOMException('片源解析超时', 'TimeoutError')), this.playTimeoutMs).unref();
+    let timeout = setTimeout(() => controller.abort(new DOMException('片源解析超时', 'TimeoutError')), this.playTimeoutMs).unref();
     const wait = promise => waitForPlayback(promise, controller.signal);
     let cloudLease;
     try {
@@ -307,15 +320,32 @@ class Library {
     const video = await wait(this.detail(siteKey, vodId, false, controller.signal));
     const group = video.lines[Number(line)], episode = group?.episodes[Number(index)];
     if (!episode) throw failure('所选播放线路或剧集不存在');
+    const isCloud = /^cloud-/.test(site.adapter || '') || episode.id.startsWith('cloud:');
+    if (isCloud) this.cloudPlayController = controller;
     cloudLease=await wait(this.cloud.holdEpisode(episode.id,controller.signal));
-    if(controller.signal.aborted||(/^cloud-/.test(site.adapter||'')&&cloudGeneration!==this.cloudGeneration))throw failure('网盘账号状态或播放选择已变化，请重新播放',409);
+    if(controller.signal.aborted||(isCloud&&cloudGeneration!==this.cloudGeneration))throw failure('网盘账号状态或播放选择已变化，请重新播放',409);
     let resolved;
-    if(saveToDrive===true){
-      if(!/^cloud-/.test(site.adapter||'')||!episode.id.startsWith('cloud:'))throw failure('此线路不支持保存到网盘');
-      const media=await wait(this.cloud.saveShare(episode.id,{consent:true,signal:controller.signal}));
-      resolved=await wait(require('./playback').resolvePlayback(site,media,{parsers:this.parsers,parserKey,signal:controller.signal,flag:group.name,quality}));
-    }else resolved = await wait(catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal,{quality}));
-    if(/^cloud-/.test(site.adapter||'') && cloudGeneration!==this.cloudGeneration)throw failure('网盘账号状态已变化，请重新播放',409);
+    const saveAndResolve = async () => {
+      if (!episode.id.startsWith('cloud:')) throw failure('此线路不支持保存到网盘');
+      const media = await wait(this.cloud.saveShare(episode.id, { consent: true, signal: controller.signal }));
+      return wait(require('./playback').resolvePlayback(site, media, { parsers: this.parsers, parserKey, signal: controller.signal, flag: group.name, quality }));
+    };
+    if (saveToDrive === true) {
+      resolved = await saveAndResolve();
+    } else {
+      try {
+        resolved = await wait(catalog.resolve(site, group, episode, this.parsers, parserKey, controller.signal, { quality }));
+      } catch (error) {
+        if (error.requiresSave && episode.id.startsWith('cloud:')) {
+          clearTimeout(timeout);
+          timeout = setTimeout(() => controller.abort(new DOMException('片源解析超时', 'TimeoutError')), this.playTimeoutMs).unref();
+          resolved = await saveAndResolve();
+        } else {
+          throw error;
+        }
+      }
+    }
+    if(isCloud && cloudGeneration!==this.cloudGeneration)throw failure('网盘账号状态已变化，请重新播放',409);
     if (controller.signal.aborted || generation !== this.generation || controller !== this.playController || previousSession !== castState.getSnapshot().sessionId) throw failure('已被新的播放操作替代', 409);
     this.trackProgress(castState.getSnapshot());
     const state = castState.setMedia({ url: mediaHeaders.mediaUrl(resolved.url, resolved.headers, resolved.audioUrl, resolved.mimeType, resolved.playlistContext), protocol: 'Library', mediaType: 'video', metadata: { title: video.title + ' · ' + episode.name, artist: site.name, artwork: video.picture, mimeType: resolved.mimeType, isLive: resolved.isLive }, clientName: '电脑独立点播', autoPlay: true,startPosition:Math.max(0,Math.min(604800,Number(resumePosition)||0)),startPositionUnit:'seconds' });

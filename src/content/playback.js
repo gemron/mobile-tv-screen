@@ -20,6 +20,7 @@ function mimeType(url, hint = '') {
   if (/flv/.test(type) || /\.flv(?:[?#]|$)/i.test(url)) return 'video/x-flv';
   if (/mpegts|mp2t/.test(type) || /\.ts(?:[?#]|$)/i.test(url)) return 'video/mp2t';
   if (/dash|mpd/.test(type) || /\.mpd(?:[?#]|$)/i.test(url)) return 'application/dash+xml';
+  if (/matroska|\bmkv\b/.test(type) || /\.mkv(?:[?#]|$)/i.test(url)) return 'video/x-matroska';
   if (['mp4','webm','m4v'].includes(type)) return type === 'webm' ? 'video/webm' : 'video/mp4';
   if (['mp3','m4a','aac','wav','ogg','flac'].includes(type)) return {mp3:'audio/mpeg',m4a:'audio/mp4',aac:'audio/aac',wav:'audio/wav',ogg:'audio/ogg',flac:'audio/flac'}[type];
   if (/^(?:video|audio)\/[\w.+-]+$/.test(type)) return type;
@@ -43,6 +44,9 @@ async function sniffType(url, headers, signal) {
       const bytes = data.subarray(0, 4096), text = bytes.toString('utf8').replace(/^\uFEFF/, '').trimStart();
       if (text.startsWith('#EXTM3U')) return 'application/vnd.apple.mpegurl';
       if (bytes.toString('ascii', 4, 8) === 'ftyp') return 'video/mp4';
+      if (bytes.length >= 4 && bytes.readUInt32BE(0) === 0x1a45dfa3) {
+        return bytes.subarray(0, 64).includes(Buffer.from('webm')) ? 'video/webm' : 'video/x-matroska';
+      }
       if (/^<!doctype|^<html|^<head/i.test(text)) throw new Error('播放地址返回了网页，未得到媒体数据');
       break;
     }
@@ -68,7 +72,7 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
   if (!choices.values.length) throw new Error(result.msg || result.message || '站点没有返回播放地址');
   if (!Number.isInteger(selected) || selected < 0 || selected >= choices.values.length) throw Object.assign(new Error('所选画质已不存在，请重新选择'), { status: 400 });
   let url = choices.values[selected].url;
-  if (result.localUrl && /^\/api\/library\/torrent\/[a-f0-9]+\/\d+\/stream\.[a-z0-9]+$/.test(url)) return { url, headers: {}, mimeType: '', qualities: [], quality: 0 };
+  if (result.localUrl && /^\/api\/library\/torrent\/[a-f0-9]+\/\d+\/stream\.[a-z0-9]+$/.test(url)) return { url, headers: {}, mimeType: mimeType(url), qualities: [], quality: 0 };
   const defaults = result.inheritHeaders === false ? {} : { ...site.headers };
   if (!sameOrigin(webUrl(url, site.api), site.api)) { delete defaults.cookie; delete defaults.authorization; }
   const selectedOrigin=new URL(webUrl(url,site.api)).origin;
@@ -122,6 +126,14 @@ async function resolvePlayback(site, raw, { parsers = [], parserKey = '', flag =
   url = webUrl(url, site.api);
   if (result.playlistContext && new URL(url).origin !== selectedOrigin) throw new Error('专用播放线路地址已变化，请使用自动播放重试');
   if (!sameOrigin(url, site.api) && credentialOrigin !== new URL(url).origin) { delete headers.cookie; delete headers.authorization; }
+  if (!headers.cookie && result.inheritHeaders !== false && site.browser && typeof site.browser.sessionFor === 'function') {
+    const mediaSession = await site.browser.sessionFor(url);
+    if (mediaSession?.cookie) {
+      headers.cookie = mediaSession.cookie;
+      if (mediaSession.userAgent && !headers['user-agent']) headers['user-agent'] = mediaSession.userAgent;
+      credentialOrigin = new URL(url).origin;
+    }
+  }
   let mime = mimeType(url, hint);
   if (!mime && !/\.(mp4|webm|m4v|mp3|m4a|aac|wav|ogg)(?:[?#]|$)/i.test(url)) mime = await sniffType(url, headers, signal);
   if (mime === 'application/dash+xml') throw new Error('该线路返回 DASH 清单；当前支持分离音视频地址转封装，请选择 HLS 或 MP4 线路');

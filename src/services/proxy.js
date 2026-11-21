@@ -225,7 +225,7 @@ function createProxyRouter(options = {}) {
       context=current.searchParams.get('headerContext')||'';
       const scoped=context?mediaHeaders.get(context,target):{};
       if(!scoped)throw Object.assign(new Error('媒体凭据已过期，请重新选择影片'),{status:410});
-      headers={...resolveUpstreamHeaders(context?'':target,current.searchParams.get('referer')||''),...scoped};current=new URL(target,base);
+      headers={...Object.fromEntries(Object.entries(resolveUpstreamHeaders(context?'':target,current.searchParams.get('referer')||'')).map(([key,value])=>[key.toLowerCase(),value])),...scoped};current=new URL(target,base);
     }
     if(!['http:','https:'].includes(current.protocol))throw new Error('此媒体暂不支持内置轨道读取');
     const playlist=/m3u8(?:$|\?)/i.test(current.href)||/mpegurl/i.test(state.metadata?.mimeType||'');
@@ -236,7 +236,7 @@ function createProxyRouter(options = {}) {
     try{const result=await work(req,controller.signal);if(!res.destroyed)res.json(result);}catch(error){if(!res.destroyed)res.status(error.status||(['AbortError','TimeoutError'].includes(error.name)?409:502)).json({error:error.name==='TimeoutError'?'轨道读取超时，请重试':error.message});}finally{res.off('close',abort);}
   };
   router.get('/media/tracks',trackTask(async(req,signal)=>{const result=await tracks.list(req.query.sessionId,signal);signal.throwIfAborted();castState.setMediaDuration(result);return result;}));
-  router.post('/media/subtitles',express.json({limit:'4kb'}),trackTask((req,signal)=>tracks.subtitles(req.body?.sessionId,req.body?.index,req.body?.position,signal)));
+  router.post('/media/subtitles',express.json({limit:'4kb'}),trackTask((req,signal)=>tracks.subtitles(req.body?.sessionId,req.body?.index,req.body?.position,signal,{exact:req.body?.exact===true})));
   const remuxBuffers = new Set();
   router.remuxBufferStats = (sessionId = castState.getSnapshot().sessionId) => {
     const active = [...remuxBuffers].filter(item => item.sessionId === sessionId && !item.buffer.destroyed);
@@ -364,7 +364,17 @@ function createProxyRouter(options = {}) {
 
       upRes.on('end', async () => {
         if (clientClosed || res.destroyed || res.headersSent) return;
-        let bodyText = mediaHeaders.cleanPlaylist(headerContext, Buffer.concat(chunks).toString('utf8'), finalUrl);
+        const rawBody = Buffer.concat(chunks).toString('utf8');
+        if (!/^\uFEFF?\s*#EXTM3U\b/i.test(rawBody)) {
+          res.status(502).set({
+            'Content-Type': 'application/json; charset=utf-8',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'no-store',
+            'X-Media-Segment-Error': 'invalid-playlist',
+          }).json({ error: '播放列表已失效或源站返回了错误页面，请重新选择剧集或切换线路' });
+          return;
+        }
+        let bodyText = mediaHeaders.cleanPlaylist(headerContext, rawBody, finalUrl);
         const filtered = await adFilter.filter(bodyText, finalUrl);
         if (clientClosed || res.destroyed || res.headersSent) return;
         bodyText = filtered.content;
@@ -387,6 +397,43 @@ function createProxyRouter(options = {}) {
       return;
     }
 
+    const isHlsSegment = cache.eligible(cacheKey) || (req.method === 'GET' && /\/ts\/|\.(?:ts|m4s|m2ts)(?:[?#]|$)/i.test(finalUrl));
+    const rejectBadSegment = () => {
+      cacheFill?.cancel();
+      cacheFill = null;
+      cleanupUpstream();
+      if (!res.destroyed && !res.headersSent) {
+        res.status(502).set({
+          'Content-Type': 'application/json; charset=utf-8',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'no-store',
+          'X-Media-Segment-Error': 'invalid-segment',
+        }).json({ error: '源站切片返回异常数据（可能残缺或已过期），建议切换其他线路' });
+      }
+    };
+    if (isHlsSegment && (upRes.statusCode || 200) < 400 && /^(?:application\/(?:json|problem\+json|xhtml\+xml)|text\/html)\b/i.test(contentType)) {
+      rejectBadSegment();
+      return;
+    }
+
+    let firstChunk = null;
+    if (isHlsSegment && (upRes.statusCode || 200) < 400 && /^text\/plain\b/i.test(contentType)) {
+      firstChunk = await new Promise((resolve) => {
+        const onData = (chunk) => { cleanup(); upRes.pause(); resolve(chunk); };
+        const onEnd = () => { cleanup(); resolve(null); };
+        const onErr = () => { cleanup(); resolve(null); };
+        const cleanup = () => { upRes.off('data', onData); upRes.off('end', onEnd); upRes.off('error', onErr); };
+        upRes.on('data', onData);
+        upRes.once('end', onEnd);
+        upRes.once('error', onErr);
+      });
+      if (clientClosed || res.destroyed || res.headersSent) { cleanupUpstream(); return; }
+      if (firstChunk && /^\s*(?:<!doctype\b|<html\b|<pre\b|\{\s*"(?:code|err|error|msg|message|status)")/i.test(firstChunk.toString('utf8', 0, Math.min(firstChunk.length, 512)))) {
+        rejectBadSegment();
+        return;
+      }
+    }
+
     // Zero-copy streaming pipe for MP4, FLV, TS, M4S, audio & images
     const passHeaders = {
       'Content-Type': contentType,
@@ -404,6 +451,10 @@ function createProxyRouter(options = {}) {
     try {
       passHeaders['X-Media-Cache'] = cacheFill ? 'MISS' : 'BYPASS';
       res.writeHead(upRes.statusCode || 200, passHeaders);
+      if (firstChunk) {
+        if (cacheFill) cacheFill.append(firstChunk);
+        res.write(firstChunk);
+      }
       if (cacheFill) {
         const fill = cacheFill;
         const capture = new Transform({
@@ -453,9 +504,9 @@ function createProxyRouter(options = {}) {
       '-loglevel',
       'error',
       '-analyzeduration',
-      '1000000',
+      '5000000',
       '-probesize',
-      '1000000',
+      '10000000',
     ];
 
     if (/^https?:/i.test(targetUrl)) {
@@ -479,8 +530,9 @@ function createProxyRouter(options = {}) {
     }
 
     if(!audioUrl){
-      if(burnSubtitle!==null)args.push('-filter_complex',`[0:s:${burnSubtitle}][0:v:0]scale2ref[s][base];[base][s]overlay=eof_action=pass[v]`,'-map','[v]','-map',audioTrack!==null?'0:a:'+audioTrack+'?':'0:a:0?');
-      else if(audioTrack!==null)args.push('-map','0:v:0','-map','0:a:'+audioTrack+'?');
+      const selectedAudio = audioTrack !== null ? '0:a:' + audioTrack + '?' : '0:a:0?';
+      if(burnSubtitle!==null)args.push('-filter_complex',`[0:s:${burnSubtitle}][0:V:0]scale2ref[s][base];[base][s]overlay=eof_action=pass[v]`,'-map','[v]','-map',selectedAudio,'-sn','-dn');
+      else args.push('-map','0:V:0?','-map',selectedAudio,'-sn','-dn');
     }
     if (reencode || burnSubtitle!==null) {
       args.push(
@@ -501,9 +553,9 @@ function createProxyRouter(options = {}) {
       // Video copy = zero CPU video re-encoding while remuxing to fragmented MP4
       args.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k');
     }
-    // Browser output always has a stereo AAC track, including AC-3 / DTS 5.1
-    // sources whose dialogue would otherwise depend on system surround routing.
-    args.push('-ac','2');
+    // Browser output always has a 48 kHz stereo AAC track, including AC-3 / DTS /
+    // TrueHD multi-channel or high-sample-rate Blu-ray sources.
+    args.push('-ac','2','-ar','48000');
 
     // A copied video keeps its keyframe preroll while encoded audio is trimmed
     // to the requested seek time. Wait for initial packets before writing the

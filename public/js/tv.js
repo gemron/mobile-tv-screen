@@ -99,12 +99,32 @@
   let fallbackStage = 0; // 0: initial, 1: proxy fallback, 2: transcode fallback
   let isUserSeeking = false;
   let hudTimer = null;
+  let viewportClickTimer = null;
+  let ignoreNextViewportClick = false;
   let lastTelemetrySentMs = 0;
   let lastFrameCount = 0;
   let lastDroppedCount = 0;
   let lastFrameTs = performance.now();
   let autoplayMutedFallback = false;
   window.MobileTVPlayerState = () => currentState;
+  window.MobileTVActiveStreamMode = () => activeStreamMode;
+
+  function isMatroskaMedia(rawUrl, mime = currentState?.metadata?.mimeType || '') {
+    if (/matroska/i.test(mime || '')) return true;
+    if (!rawUrl) return false;
+    try {
+      let current = new URL(rawUrl, location.href);
+      for (let depth = 0; depth < 4 && current.origin === location.origin && ['/api/proxy', '/api/transcode'].includes(current.pathname); depth++) {
+        const inner = current.searchParams.get('url');
+        if (!inner) break;
+        current = new URL(inner, location.href);
+      }
+      if (/\.mkv$/i.test(current.pathname)) return true;
+    } catch {}
+    let decoded = String(rawUrl);
+    try { decoded = decodeURIComponent(decoded); } catch {}
+    return /\.mkv(?:$|[?#&])/i.test(decoded);
+  }
 
   function playbackPosition() {
     return (Number(els.tvVideo.currentTime) || 0) + transcodeBase;
@@ -164,7 +184,7 @@
   }
 
   function startNativePlayback(video) {
-    if (activeStreamMode === 'transcode' && currentState?.mediaType === 'video' && /matroska/i.test(currentState?.metadata?.mimeType || '') && video.readyState >= 1 && !video.videoWidth) {
+    if (activeStreamMode === 'transcode' && currentState?.mediaType === 'video' && isMatroskaMedia(activeUrl) && video.readyState >= 1 && !video.videoWidth) {
       reportVideoDecoderFailure(video);
       return;
     }
@@ -260,7 +280,15 @@
 
   function isServerRemux(url){try{const value=new URL(url,location.href);return value.origin===location.origin&&value.pathname==='/api/transcode';}catch{return false;}}
 
+  function clearViewportClick() {
+    if (viewportClickTimer !== null) {
+      clearTimeout(viewportClickTimer);
+      viewportClickTimer = null;
+    }
+  }
+
   function destroyMediaEngines() {
+    clearViewportClick();
     remuxPlayer?.destroy();
     remuxPlayer = null;
     preparedRanges=[];remuxRequestId='';
@@ -388,7 +416,8 @@
         } },
       });
       const engine = hlsPlayer;
-      let networkRecoveries = 0, mediaRecoveries = 0;
+      let networkRecoveries = 0, mediaRecoveries = 0, warnedBadFrags = false;
+      const badFrags = new Set();
       hlsPlayer.loadSource(resolvedUrl);
       hlsPlayer.attachMedia(video);
       hlsPlayer.on(window.Hls.Events.MANIFEST_PARSED, () => {
@@ -406,7 +435,24 @@
         engine.config.backBufferLength = live ? 15 : 30;
       });
       hlsPlayer.on(window.Hls.Events.ERROR, (_, data) => {
-        if (hlsPlayer !== engine || !data?.fatal) return;
+        if (hlsPlayer !== engine) return;
+        if (data?.details === 'fragLoadError' || data?.details === 'fragParsingError') {
+          const code = Number(data?.response?.code || 0);
+          if (data.details === 'fragParsingError' || [403, 404, 410, 502].includes(code)) {
+            badFrags.add(data?.frag?.url || String(data?.frag?.sn ?? badFrags.size));
+            if (badFrags.size >= 2 && !warnedBadFrags) {
+              warnedBadFrags = true;
+              window.MobileTVUI?.toast?.('当前线路存在残缺或失效切片，播放可能跳帧，建议切换其他线路');
+            }
+          }
+        }
+        if (!data?.fatal) return;
+        if (data?.details === 'manifestLoadError' && Number(data?.response?.code) === 502) {
+          els.bufferingPill.textContent = '播放列表已失效，请重新选择剧集或切换其他线路';
+          els.bufferingPill.classList.add('show');
+          window.MobileTVUI?.toast?.('当前线路播放列表已失效，请重新选择剧集或切换其他线路');
+          return;
+        }
         if (data.type === window.Hls.ErrorTypes?.NETWORK_ERROR && networkRecoveries++ < 1) {
           els.bufferingPill.textContent = '网络波动，正在重试…';
           hlsRecoveryTimer = setTimeout(() => {
@@ -456,7 +502,7 @@
     }
 
     if (mode === 'transcode' && !currentState?.metadata?.isLive && !nativeRemuxOnly && window.MobileTVRemuxPlayer
-        && (/matroska/i.test(mime) || /\.mkv(?:$|[?&])/i.test(rawUrl))) {
+        && isMatroskaMedia(rawUrl, mime)) {
       remuxPlayer = window.MobileTVRemuxPlayer.open(video, resolvedUrl, streamDuration - transcodeBase, retryNativeRemux);
     } else video.src = resolvedUrl;
     video.load();
@@ -873,9 +919,9 @@
   els.tvVideo.addEventListener('loadedmetadata', () => {
     updateSeekBuffer();
     // MKV may expose metadata and decoded frames while its audio clock remains
-    // stalled. Keep its known duration, then remux to MP4 with video copy and
-    // compatible audio rather than trusting native MKV playback readiness.
-    if (currentState?.mediaType === 'video' && /matroska/i.test(currentState?.metadata?.mimeType || '') && activeStreamMode !== 'transcode') {
+    // stalled or its multi-track AC-3/EAC-3/DTS/TrueHD audio is silently dropped.
+    // Keep its known duration, then remux to MP4 with video copy and stereo AAC.
+    if (currentState?.mediaType === 'video' && isMatroskaMedia(activeUrl) && activeStreamMode !== 'transcode') {
       const duration = playbackDuration();
       const position = pendingStartPos > 0
         ? pendingStartUnit !== 'seconds' && pendingStartPos <= 1 && duration > 1
@@ -897,7 +943,7 @@
       els.seekSlider.max = dur;
       els.lblDuration.textContent = formatSec(dur);
     }
-    if (currentState?.mediaType === 'video' && /matroska/i.test(currentState?.metadata?.mimeType || '') && !els.tvVideo.videoWidth && activeStreamMode === 'transcode') {
+    if (currentState?.mediaType === 'video' && isMatroskaMedia(activeUrl) && !els.tvVideo.videoWidth && activeStreamMode === 'transcode') {
       reportVideoDecoderFailure(els.tvVideo);
       return;
     }
@@ -1180,8 +1226,43 @@
       els.playerStage.focus({ preventScroll: true });
     }
   });
+  els.mediaViewport.addEventListener('pointerdown', (event) => {
+    if (event.button && event.button !== 0) return;
+    ignoreNextViewportClick = Boolean(
+      autoplayMutedFallback
+      || $('playerOptions')?.open
+      || $('playerRate')?.open
+      || document.querySelector?.('dialog[open]')
+      || els.logDrawer.classList.contains('open')
+    );
+  }, true);
   els.mediaViewport.addEventListener('click', (event) => {
+    const dismissedOverlay = ignoreNextViewportClick;
+    ignoreNextViewportClick = false;
     if (event.target !== els.bufferingPill) els.playerStage.focus({ preventScroll: true });
+    if (dismissedOverlay || event.target === els.bufferingPill || event.target?.closest?.('button, a, input, select, summary')) return;
+    if (!currentState || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
+    if (!['video', 'audio'].includes(currentState.mediaType)) return;
+    if (event.detail > 1) {
+      clearViewportClick();
+      return;
+    }
+    clearViewportClick();
+    const sessionId = currentState.sessionId;
+    viewportClickTimer = setTimeout(() => {
+      viewportClickTimer = null;
+      if (!currentState || currentState.sessionId !== sessionId || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
+      postControl({ action: currentState.status === 'PLAYING' ? 'pause' : 'play' });
+      wakeHud();
+    }, 220);
+  });
+  els.mediaViewport.addEventListener('dblclick', (event) => {
+    clearViewportClick();
+    ignoreNextViewportClick = false;
+    if (event.target === els.bufferingPill || event.target?.closest?.('button, a, input, select, summary')) return;
+    if (!currentState || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
+    toggleFullscreen();
+    wakeHud();
   });
   window.addEventListener('resize', applyMediaTransform);
 

@@ -24,7 +24,7 @@ async function page(site, address, signal) {
   let result;
   try { result = await resource(url, { headers: site.headers, signal, timeout: 12000 }); }
   catch (error) {
-    if (!site.browser || !/403|503/.test(error.message)) throw error;
+    if (error.status === 428 || error.code === 'SOURCE_REGION_BLOCKED' || !site.browser || !/403|503/.test(error.message)) throw error;
     result = await site.browser.run(url, { signal });
   }
   if (/<title>[^<]*(?:人机验证|Just a moment)/i.test(result.text)) {
@@ -161,6 +161,9 @@ async function resolve(site, episode, signal) {
     if (encoded) return media(json(xxteaDecrypt(Buffer.from(encoded, 'base64'), 'ABCDEFGHIJKLMNOPQRSTUVWX')).url);
   }
   try { return await resolvePage(site, episode.id, signal); }
-  catch (error) { if (!site.browser) throw error; return site.browser.run(episode.id, { media: true, signal }); }
+  catch (error) {
+    if (error.status === 428 || error.code === 'SOURCE_REGION_BLOCKED' || !site.browser) throw error;
+    return site.browser.run(error.playerUrl || episode.id, { media: true, signal, ...(error.playerReferer ? { headers: { referer: error.playerReferer } } : {}) });
+  }
 }
 module.exports = { describe, list, detail, resolve, xxteaDecrypt };

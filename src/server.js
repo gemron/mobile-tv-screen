@@ -285,7 +285,10 @@ async function createAppServer(options = {}) {
           url: String(url).trim(),
           protocol: 'WebCast',
           mediaType: mediaType || '',
-          metadata: { title: title || '' },
+          metadata: {
+            title: title || '',
+            mimeType: /\.mkv(?:[?#]|$)/i.test(String(url).trim()) ? 'video/x-matroska' : '',
+          },
           clientIp: (req.ip || '').replace('::ffff:', ''),
           clientName: 'Web 投屏推送',
           autoPlay: true,
@@ -368,12 +371,15 @@ async function createAppServer(options = {}) {
     const originalName = req.file.originalname || req.file.filename;
     const clientIp = (req.ip || '').replace('::ffff:', '');
 
+    const uploadedMime = (!req.file.mimetype || req.file.mimetype === 'application/octet-stream') && /\.mkv$/i.test(originalName)
+      ? 'video/x-matroska'
+      : req.file.mimetype || '';
     const snap = castState.setMedia({
       url: mediaUrl,
       protocol: 'WebCast',
       metadata: {
         title: originalName,
-        mimeType: req.file.mimetype || '',
+        mimeType: uploadedMime,
       },
       clientIp,
       clientName: `手机本地文件 (${clientIp})`,

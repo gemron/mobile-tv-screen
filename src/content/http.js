@@ -1,7 +1,7 @@
 const { createGunzip, createBrotliDecompress, createInflate } = require('zlib');
 const { openUpstreamStream } = require('../services/proxy');
 const { webUrl, MAX_DOCUMENT, cleanHeaders } = require('./format');
-const { assertRegionAccess } = require('./source-access');
+const { assertSourceAccess } = require('./source-access');
 
 async function resource(address, { headers = {}, signal, limit = MAX_DOCUMENT, timeout = 20000 } = {}) {
   const url = webUrl(address);
@@ -34,7 +34,9 @@ async function resource(address, { headers = {}, signal, limit = MAX_DOCUMENT, t
     const charset = /charset\s*=\s*["']?([^;\s"']+)/i.exec(String(upRes.headers['content-type'] || ''))?.[1] || 'utf-8';
     let text;
     try { text = new TextDecoder(charset).decode(body); } catch { text = body.toString('utf8'); }
-    if (failed || /text\/html|text\/plain/i.test(String(upRes.headers['content-type'] || ''))) assertRegionAccess(text);
+    if (failed || /text\/html|text\/plain/i.test(String(upRes.headers['content-type'] || ''))) {
+      assertSourceAccess(text, { status: upRes.statusCode, headers: upRes.headers, url: finalUrl || url });
+    }
     if (failed) throw new Error(`远端接口返回 HTTP ${upRes.statusCode}`);
     return { body, text, url: finalUrl, headers: upRes.headers };
   } finally { clearTimeout(failureTimer); if (stream !== upRes) stream.destroy(); upRes.destroy(); }
@@ -48,7 +50,25 @@ async function postResource(address, body, { headers = {}, signal, timeout = 200
   const multipart = body instanceof FormData;
   if (multipart) delete requestHeaders['content-type']; else requestHeaders['content-type'] = contentType;
   const response = await fetch(webUrl(address), { method: 'POST', headers: requestHeaders, body: multipart || typeof body === 'string' || body instanceof Uint8Array ? body : JSON.stringify(body), signal: combined, redirect: 'error' });
-  if (!response.ok) { await response.body?.cancel(); throw new Error(`远端接口返回 HTTP ${response.status}`); }
+  if (!response.ok) {
+    let errorText = '';
+    try {
+      const reader = response.body?.getReader?.();
+      if (reader) {
+        const parts = []; let total = 0;
+        while (total < 16384) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          parts.push(Buffer.from(value.subarray(0, 16384 - total)));
+          total += value.length;
+        }
+        reader.cancel().catch(() => {});
+        errorText = Buffer.concat(parts).toString('utf8');
+      }
+    } catch {}
+    if (errorText) assertSourceAccess(errorText, { status: response.status, headers: Object.fromEntries(response.headers), url: response.url || webUrl(address) });
+    throw new Error(`远端接口返回 HTTP ${response.status}`);
+  }
   const chunks = []; let size = 0;
   for await (const chunk of response.body) {
     size += chunk.length;

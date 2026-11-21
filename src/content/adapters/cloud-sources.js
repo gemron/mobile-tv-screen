@@ -18,16 +18,23 @@ const text=v=>String(v||'').replace(/<[^>]*>/g,'').trim();
 function cards($,base){const output=[];$('.module-item,.module-search-item,.post-item,.movie-item,.movies .item,.card').slice(0,300).each((_,e)=>{const row=$(e),a=row.find('a[title],h2 a,h3 a,a[href*="detail"],a[href*="movie"]').first(),href=a.attr('href');if(!href)return;const title=text(a.attr('title')||row.find('h2,h3,.title').first().text()||a.text()),img=row.find('img').first();if(title)output.push({vod_id:webUrl(href,base),vod_name:title,vod_pic:img.attr('data-src')||img.attr('data-original')||img.attr('src'),vod_remarks:text(row.find('.module-item-note,.note,.state').first().text())});});return [...new Map(output.map(v=>[v.vod_id,v])).values()];}
 async function page(site,url,signal){
   const candidates=[site.api,...(site.mirrors||[]).filter(value=>value!==site.api)],target=new URL(url),current=new URL(site.api);
-  let last;
+  let last,verifyError;
   for(const candidate of candidates){
     const address=target.origin===current.origin?new URL(target.pathname+target.search,candidate).href:url;
     const headers={...site.headers,referer:candidate};
-    if(new URL(address).origin!==current.origin){delete headers.cookie;delete headers.authorization;}
+    if(new URL(address).origin!==current.origin){
+      delete headers.cookie;delete headers.authorization;
+      if(site.browser&&typeof site.browser.sessionFor==='function'){
+        const session=await site.browser.sessionFor(address);
+        if(session?.cookie){headers.cookie=session.cookie;if(session.userAgent&&!site.fixedUserAgent)headers['user-agent']=session.userAgent;}
+      }
+    }
     try{const r=await resource(address,{headers,signal,timeout:6000});
       if(!/<[a-z][\s\S]*>/i.test(r.text))throw new Error('源站未返回影视页面');
       site.api=candidate;return {...r,$:cheerio.load(r.text)};
-    }catch(e){signal?.throwIfAborted();last=e;if(e.code==='SOURCE_REGION_BLOCKED')throw e;}
+    }catch(e){signal?.throwIfAborted();last=e;if(e.code==='SOURCE_REGION_BLOCKED')throw e;if(e.status===428&&!verifyError)verifyError=e;}
   }
+  if(verifyError)throw verifyError;
   if(site.browser&&/403/.test(last?.message||'')){const r=await site.browser.run(url,{signal});return {...r,$:cheerio.load(r.text)};}
   throw last;
 }

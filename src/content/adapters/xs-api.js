@@ -60,6 +60,6 @@ async function detail(site,id,signal){
 async function resolve(site,episode,signal){
   if(site.plugin==='Duboku'){const d=await get(site,episode.id,signal);return {url:webUrl(dubokuDecode(d.HId)),parse:0,header:{...site.headers,origin:'https://w.duboku.io',referer:'https://w.duboku.io/'}};}
   if(site.plugin==='AppLY'){const facts=await site.material.get('AppLY',signal),id=facts.strings.find(s=>/^[0-9a-f]{32}$/.test(s));if(!id)throw new Error('订阅缺少戏曲播放参数');const d=await ly(site,'play/get/playurl',{item:'y9',nodeCode:'001000',project:'lyhxcx',px:'2',resCode:episode.id,userId:id},signal);if(!d.playres?.playurl)throw new Error('戏曲接口未返回可播放地址');return {url:webUrl(d.playres.playurl),parse:0,header:site.headers};}
-  try{return await resolvePage(site,episode.id,signal);}catch(error){if(!site.browser||signal?.aborted)throw error;return site.browser.run(webUrl(episode.id,site.api),{media:true,signal});}
+  try{return await resolvePage(site,episode.id,signal);}catch(error){if(error.status===428||error.code==='SOURCE_REGION_BLOCKED'||!site.browser||signal?.aborted)throw error;return site.browser.run(error.playerUrl||webUrl(episode.id,site.api),{media:true,signal,...(error.playerReferer?{headers:{referer:error.playerReferer}}:{})});}
 }
 module.exports={describe,list,detail,resolve,JavaRandom,dubokuSign,dubokuDecode,jsonp};

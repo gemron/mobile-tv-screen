@@ -7,10 +7,68 @@ const { randomUUID } = require('crypto');
 const WebSocket = require('ws');
 const { setTimeout: delay } = require('timers/promises');
 const { webUrl, cleanHeaders } = require('./format');
-const { assertRegionAccess } = require('./source-access');
+const { assertRegionAccess, assertSourceAccess } = require('./source-access');
+
+const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const MAX_SAVED_SESSIONS = 200;
 
 class SourceBrowser {
-  constructor(dataDir) { this.profile = path.resolve(dataDir, 'source-browser'); this.pending = new Map(); this.sequence = 0; this.queue = Promise.resolve(); this.closed = false; }
+  constructor(dataDir) {
+    this.profile = path.resolve(dataDir, 'source-browser');
+    this.sessionsFile = path.resolve(dataDir, 'source-sessions.json');
+    this.sessions = {};
+    this.browserUserAgent = '';
+    try {
+      const stored = JSON.parse(fs.readFileSync(this.sessionsFile, 'utf8'));
+      if (stored && typeof stored === 'object' && !Array.isArray(stored)) this.sessions = stored;
+    } catch {}
+    this.pending = new Map(); this.sequence = 0; this.queue = Promise.resolve(); this.closed = false;
+  }
+  persistSessions() {
+    const entries = Object.entries(this.sessions)
+      .filter(([, value]) => value && typeof value.cookie === 'string' && value.cookie && (!value.updatedAt || Date.now() - value.updatedAt < SESSION_TTL_MS))
+      .sort((a, b) => (b[1].updatedAt || 0) - (a[1].updatedAt || 0))
+      .slice(0, MAX_SAVED_SESSIONS);
+    this.sessions = Object.fromEntries(entries);
+    try {
+      fs.mkdirSync(path.dirname(this.sessionsFile), { recursive: true });
+      fs.writeFileSync(this.sessionsFile + '.tmp', JSON.stringify(this.sessions), { encoding: 'utf8', mode: 0o600 });
+      fs.renameSync(this.sessionsFile + '.tmp', this.sessionsFile);
+    } catch {}
+  }
+  saveSession(url, cookie, userAgent = this.browserUserAgent) {
+    if (!cookie) return;
+    let host;
+    try { host = new URL(url).hostname.toLowerCase(); } catch { return; }
+    const existing = this.sessions[host];
+    if (existing && existing.cookie === cookie && existing.userAgent === (userAgent || '') && Date.now() - (existing.updatedAt || 0) < 60000) return;
+    this.sessions[host] = { cookie, userAgent: userAgent || existing?.userAgent || '', updatedAt: Date.now() };
+    this.persistSessions();
+  }
+  clearSession(url) {
+    let host;
+    try { host = new URL(url).hostname.toLowerCase(); } catch { return; }
+    if (this.sessions[host]) { delete this.sessions[host]; this.persistSessions(); }
+  }
+  async sessionFor(url) {
+    let target;
+    try { target = new URL(url); } catch { return null; }
+    const host = target.hostname.toLowerCase();
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      try {
+        const cookie = await this.cookies(target.href);
+        if (cookie) {
+          this.saveSession(target.href, cookie, this.browserUserAgent);
+          return { cookie, userAgent: this.browserUserAgent || this.sessions[host]?.userAgent || '' };
+        }
+      } catch {}
+    }
+    const saved = this.sessions[host];
+    if (saved && saved.cookie && (!saved.updatedAt || Date.now() - saved.updatedAt < SESSION_TTL_MS)) {
+      return { cookie: saved.cookie, userAgent: saved.userAgent || '' };
+    }
+    return null;
+  }
   async start(visible = false) {
     if(this.closed)throw new Error('站点浏览器已关闭');
     if(this.starting)await this.starting;
@@ -51,7 +109,9 @@ class SourceBrowser {
     });
     try{
       await new Promise((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);});
-      const version=await this.command('Browser.getVersion');this.visible=!/Headless/i.test(version.userAgent||'');
+      const version=await this.command('Browser.getVersion');
+      this.visible=!/Headless/i.test(version.userAgent||'');
+      if(version.userAgent)this.browserUserAgent=String(version.userAgent).replace(/HeadlessChrome\//gi,'Chrome/');
     }catch(error){if(this.socket===socket)this.socket=null;socket.terminate();throw error;}
   }
   async launch(visible) {
@@ -91,6 +151,8 @@ class SourceBrowser {
     for(const target of targets.targetInfos||[])try{if(target.type==='page'&&matches(new URL(target.url).hostname))await this.command('Target.closeTarget',{targetId:target.targetId});}catch{}
     const stored=await this.command('Storage.getCookies'),cookies=(stored.cookies||[]).filter(c=>matches(c.domain.replace(/^\./,''))).map(c=>({name:c.name,value:'',domain:c.domain,path:c.path||'/',expires:1,...(c.partitionKey?{partitionKey:c.partitionKey}:{})}));
     if(cookies.length)await this.command('Storage.setCookies',{cookies});
+    for(const host of Object.keys(this.sessions))if(matches(host))delete this.sessions[host];
+    this.persistSessions();
     const target=await this.command('Target.createTarget',{url:'about:blank'});
     const session=(await this.command('Target.attachToTarget',{targetId:target.targetId,flatten:true})).sessionId;
     try{for(const origin of new Set(addresses.map(address=>new URL(address).origin)))await this.command('Storage.clearDataForOrigin',{origin,storageTypes:'local_storage,indexeddb'},session);}
@@ -147,11 +209,14 @@ class SourceBrowser {
         if (state?.ready === 'complete') assertRegionAccess(state.html);
         if(media&&documentReady&&!selected&&Date.now()>=nextSelection){const selectionTime=Date.now();selected=await selectByName(selectText);if(selected)selectedAt=selectionTime;else if(folderIndex<directoryNames.length&&await selectByName(directoryNames[folderIndex])){folderIndex++;nextSelection=Date.now()+500;}}
         if(!media&&documentReady&&Date.now()-documentReady>1500){
+          assertSourceAccess(state.html,{status:200,url});
           if(/人机验证|Just a moment|Checking your browser|Access denied|Attention Required/i.test((state.title||'')+' '+(state.html||'').slice(0,1800)))throw Object.assign(new Error('请先打开站点浏览器完成人机验证或登录，再重试'),{status:428,verifyUrl:url});
           if(Buffer.byteLength(state.html||'')>4*1024*1024)throw new Error('站点页面超过 4 MiB 限制');
-          return {text:state.html,body:Buffer.from(state.html||''),url:state.url,headers:{'content-type':'text/html'},cookie:await this.cookies(state.url)};
+          const cookie=await this.cookies(state.url);
+          if(cookie)this.saveSession(state.url,cookie,this.browserUserAgent);
+          return {text:state.html,body:Buffer.from(state.html||''),url:state.url,headers:{'content-type':'text/html'},cookie,userAgent:this.browserUserAgent};
         }
-        if(media&&documentReady&&selected&&!clicked){clicked=true;await evaluate('(()=>{const v=document.querySelector("video");if(v)v.play().catch(()=>{});document.querySelector(".art-video-player,.dplayer-play-icon,.vjs-big-play-button,.art-icon-playback")?.click();return true})()');}
+        if(media&&documentReady&&selected&&!clicked){clicked=true;await evaluate('(()=>{const v=document.querySelector("video");if(v)v.play().catch(()=>{});document.querySelector(".art-video-player,.dplayer-play-icon,.vjs-big-play-button,.art-icon-playback,#custom-play-button,.mui-player .play-btn")?.click();return true})()');}
         if(media&&selected&&state?.saveRequired&&new URL(url).hostname==='pan.quark.cn')throw Object.assign(new Error('夸克要求先保存此文件到网盘后播放，会占用你的网盘空间'),{status:428,verifyUrl:url,requiresSave:true});
         if(media&&clicked&&/^[.#\[]/.test(click)&&click.length<=256){await evaluate(`(()=>{try{document.querySelector(${JSON.stringify(click)})?.click()}catch{}return true})()`);click='';}
         const available=selected?candidates.filter(candidate=>candidate.started>=selectedAt):[];

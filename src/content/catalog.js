@@ -70,6 +70,7 @@ function normalizeCatalog(data, base) {
 
 async function requestCatalog(site, params, signal) {
   if (!site.supported) throw Object.assign(new Error(site.reason || '该站点尚不兼容'), { status: 422 });
+  await htmlSites.syncCookies(site);
   const url = new URL(site.api);
   for (const [key, value] of Object.entries(params)) if (value != null && value !== '') url.searchParams.set(key, String(value));
   const extension = typeof site.extension === 'string' ? site.extension : '';

@@ -13,7 +13,7 @@ function seconds(text) {
   return Number(match[1] || 0) * 3600 + Number(match[2]) * 60 + Number(match[3]) + Number((match[4] || '').padEnd(3, '0')) / 1000;
 }
 function plain(text) {
-  return text.replace(/\{[^}\r\n]*\}/g, '').replace(/\\[Nn]/g, '\n').replace(/\\h/g, ' ').replace(/<[^>\r\n]*>/g, '').replace(/&(?:amp|lt|gt|quot|apos|nbsp);/g, entity => ({'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&apos;':"'",'&nbsp;':' '})[entity]).trim().slice(0, 4000);
+  return String(text || '').replace(/\{[^}\r\n]*\\p[1-9]\d*[^}\r\n]*\}[\s\S]*?(?=\{[^}\r\n]*\\p0[^}\r\n]*\}|$)/g, '').replace(/\{[^}\r\n]*\}/g, '').replace(/\\[Nn]/g, '\n').replace(/\\h/g, ' ').replace(/<[^>\r\n]*>/g, '').replace(/&(?:amp|lt|gt|quot|apos|nbsp);/g, entity => ({'&amp;':'&','&lt;':'<','&gt;':'>','&quot;':'"','&apos;':"'",'&nbsp;':' '})[entity]).trim().slice(0, 4000);
 }
 function parseSubtitle(buffer, name = '') {
   if (!buffer.length || buffer.length > MAX_TEXT) throw new Error('字幕文件为空或超过 4 MiB');
@@ -69,4 +69,4 @@ function subtitleZip(input) {
   if (!files.length) throw new Error('压缩包中没有支持的文本字幕');
   return files;
 }
-module.exports = { parseSubtitle, subtitleZip, supported, decode, MAX_TEXT };
+module.exports = { parseSubtitle, subtitleZip, supported, decode, plain, MAX_TEXT };

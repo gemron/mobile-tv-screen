@@ -8,12 +8,12 @@ function canSearch(site) {
   return !['huya', 'douyu', 'alllive', 'xiaobei', 'extra-Kanqiu', 'extra-Music', 'extra-XPath', 'extra-YGP', 'extra-SixV'].includes(site.adapter);
 }
 
-async function searchSources(sites, keyword, { signal, onProgress, query = catalog.category, timeout = 15000, siteTimeout = 6000, isCurrent = () => true } = {}) {
+async function searchSources(sites, keyword, { signal, onProgress, query = catalog.category, timeout = 15000, siteTimeout = 6000, concurrency = 6, isCurrent = () => true } = {}) {
   keyword = String(keyword || '').trim().slice(0, 200);
   if (!keyword) throw Object.assign(new Error('请输入片名'), { status: 400 });
   signal?.throwIfAborted();
   const deadline = AbortSignal.timeout(timeout), combined = signal ? AbortSignal.any([signal, deadline]) : deadline;
-  const sources = sites.filter(canSearch), errors = [], seen = new Set(),compiled=compileQuery(keyword),sourceOrder=new Map(sources.map((site,index)=>[site.key,index]));let results=[];
+  const sources = sites.filter(canSearch), errors = [], seen = new Set(), compiled = compileQuery(keyword), sourceOrder = new Map(sources.map((site, index) => [site.key, index])); let results = [];
   let cursor = 0, completed = 0;
   const snapshot = done => ({
     list: results.slice(), errors: errors.slice(), keyword, completed, sources: sources.length, done,
@@ -22,6 +22,21 @@ async function searchSources(sites, keyword, { signal, onProgress, query = catal
   });
   const emit = done => { if (!signal?.aborted && isCurrent()) onProgress?.(snapshot(done)); };
   emit(false);
+  function boundRanked(list) {
+    const ranked = rankResults(list, compiled, sourceOrder);
+    if (ranked.length <= 300) return ranked;
+    // Always retain the top-1 match from every responding source before filling the remaining budget.
+    const kept = [], seenSites = new Set(), seenKeys = new Set();
+    for (const item of ranked) {
+      if (!seenSites.has(item.siteKey)) { seenSites.add(item.siteKey); seenKeys.add(item.siteKey + '\0' + item.id); kept.push(item); }
+    }
+    for (const item of ranked) {
+      if (kept.length >= 300) break;
+      const key = item.siteKey + '\0' + item.id;
+      if (!seenKeys.has(key)) { seenKeys.add(key); kept.push(item); }
+    }
+    return rankResults(kept, compiled, sourceOrder);
+  }
   async function worker() {
     while (cursor < sources.length && !combined.aborted && isCurrent()) {
       const site = sources[cursor++];
@@ -37,13 +52,14 @@ async function searchSources(sites, keyword, { signal, onProgress, query = catal
           const card = { id, title, picture, remarks, year, area, category, actor, ...(searchTitle ? { searchTitle } : {}) };
           results.push({ ...card, siteKey: site.key, sourceName: site.name });
         }
-        results=rankResults(results,compiled,sourceOrder).slice(0,300);
+        results = boundRanked(results);
       } catch (error) {
         if (!signal?.aborted && isCurrent()) errors.push({ siteKey: site.key, name: site.name, error: String(error.message).replace(/https?:\/\/\S+/g, '[URL]').slice(0, 240) });
       } finally { completed++; emit(false); }
     }
   }
-  await Promise.all([worker(), worker(), worker()]);
+  const workers = Math.min(Math.max(1, Number(concurrency) || 6), Math.max(1, sources.length));
+  await Promise.all(Array.from({ length: workers }, () => worker()));
   signal?.throwIfAborted();
   if (!isCurrent()) throw Object.assign(new Error('配置已切换，本次搜索已取消'), { status: 409 });
   emit(true);

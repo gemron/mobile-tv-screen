@@ -35,6 +35,54 @@ const run=(bin,args)=>execFileSync(bin,args,{windowsHide:true,maxBuffer:20*1024*
  const indexedResponse=await fetch(base+'/api/media/subtitles',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:indexedState.sessionId,index:1,position:124})});
  assert.equal(indexedResponse.status,200);const indexedResult=await indexedResponse.json();assert.equal(indexedResult.from,120);assert.equal(indexedResult.to,300);assert.ok(indexedResult.cues.some(c=>c.text==='跳转后的字幕'));
  console.log('PASS: indexed high-bitrate MKV subtitles skip video bytes, preserve absolute timing and accept windows without dialogue');
+ // Multi-audio MKV + ASS (with tag-only & drawing cues) + cover art + video-only Cues + zlib-compressed subtitles + non-206 fallback.
+ const assFile=path.join(directory,'tags.ass'),multiMkv=path.join(directory,'multi-audio.mkv'),coverImg=path.join(directory,'cover.jpg');
+ fs.writeFileSync(assFile,['[Script Info]','ScriptType: v4.00+','[V4+ Styles]','Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding','Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1','[Events]','Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text','Dialogue: 0,0:00:00.50,0:00:02.00,Default,,0,0,0,,{\\pos(100,100)}','Dialogue: 0,0:00:01.00,0:00:02.50,Default,,0,0,0,,{\\p1}m 0 0 l 20 20{\\p0}','Dialogue: 0,0:00:03.00,0:00:06.00,Default,,0,0,0,,多音轨ASS字幕'].join('\n'));
+ run('ffmpeg',['-v','error','-f','lavfi','-i','color=c=red:size=320x180:duration=1','-frames:v','1',coverImg]);
+ run('ffmpeg',['-v','error','-f','lavfi','-i','testsrc2=size=160x90:rate=10:duration=10','-f','lavfi','-i','sine=frequency=440:sample_rate=48000:duration=10','-f','lavfi','-i','sine=frequency=880:sample_rate=48000:duration=10','-i',assFile,'-map','0:v','-map','1:a','-map','2:a','-map','3:s','-attach',coverImg,'-metadata:s:t:0','mimetype=image/jpeg','-metadata:s:t:0','filename=cover.jpg','-c:v','libx264','-preset','ultrafast','-c:a:0','ac3','-ac:a:0','6','-c:a:1','eac3','-ac:a:1','6','-c:s','ass',multiMkv]);
+ receiver.app.get('/multi-audio.mkv',(req,res)=>res.sendFile(multiMkv));
+ receiver.app.get('/no-range.mkv',(req,res)=>{res.status(200).set({'Content-Type':'video/x-matroska','Content-Length':String(fs.statSync(multiMkv).size)});fs.createReadStream(multiMkv).pipe(res);});
+ const multiState=state.setMedia({url:base+'/multi-audio.mkv',protocol:'Library',mediaType:'video',metadata:{title:'Multi-audio MKV',mimeType:'video/x-matroska'},autoPlay:false});
+ const multiTracks=await fetch(base+'/api/media/tracks?sessionId='+multiState.sessionId).then(r=>r.json());
+ assert.equal(multiTracks.audio.length,2);assert.equal(multiTracks.subtitles[0].codec,'ass');
+ const assRes=await fetch(base+'/api/media/subtitles',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:multiState.sessionId,index:multiTracks.subtitles[0].index,position:0})});
+ assert.equal(assRes.status,200);const assBody=await assRes.json();assert.deepEqual(assBody.cues.map(c=>c.text),['多音轨ASS字幕'],'ASS tag-only and vector-drawing cues are skipped cleanly without crashing');
+ const defaultRemux=await fetch(base+'/api/transcode?'+new URLSearchParams({url:base+'/multi-audio.mkv'}));assert.equal(defaultRemux.status,200);const defaultOut=path.join(directory,'mkv-default.mp4');fs.writeFileSync(defaultOut,Buffer.from(await defaultRemux.arrayBuffer()));
+ const defaultStreams=JSON.parse(run('ffprobe',['-v','error','-show_entries','stream=codec_type,codec_name,channels,sample_rate','-of','json',defaultOut])).streams;
+ assert.equal(defaultStreams.length,2,'Default MKV remux strips cover art and subtitles and maps one video + one stereo AAC track');
+ assert.equal(defaultStreams.find(s=>s.codec_type==='audio').sample_rate,'48000');
+ const tonePower=filePath=>{const raw=run('ffmpeg',['-v','error','-i',filePath,'-map','0:a:0','-ac','1','-ar','8000','-f','f32le','pipe:1']);const s=Array.from({length:Math.min(8000,raw.length/4)},(_,i)=>raw.readFloatLE(i*4));return f=>{let a=0,b=0;for(let i=0;i<s.length;i++){a+=s[i]*Math.cos(2*Math.PI*f*i/8000);b+=s[i]*Math.sin(2*Math.PI*f*i/8000);}return a*a+b*b;};};
+ const pDefault=tonePower(defaultOut);assert.ok(pDefault(440)>pDefault(880)*20,'Default MKV remux selects audio track 0 audibly');
+ const secondRemux=await fetch(base+'/api/transcode?'+new URLSearchParams({url:base+'/multi-audio.mkv',audioTrack:'1'}));assert.equal(secondRemux.status,200);const secondOut=path.join(directory,'mkv-second.mp4');fs.writeFileSync(secondOut,Buffer.from(await secondRemux.arrayBuffer()));
+ const pSecond=tonePower(secondOut);assert.ok(pSecond(880)>pSecond(440)*20,'Selected MKV audioTrack=1 encodes the second track audibly');
+ // Synthetic zlib-compressed subtitle MKV with video-only Cues (mkvmerge default).
+ const zlib=require('zlib'),ebmlId=(id,body)=>{const idBytes=[];for(let n=id;n>0;n=Math.floor(n/256))idBytes.unshift(n&255);let w=1;while(w<=8&&body.length>=(1<<(7*w))-1)w++;const sz=Buffer.alloc(w);let v=body.length;for(let i=w-1;i>=0;i--){sz[i]=v&255;v=Math.floor(v/256);}sz[0]|=0x80>>(w-1);return Buffer.concat([Buffer.from(idBytes),sz,body]);};
+ const uintBuf=n=>{if(!n)return Buffer.from([0]);const a=[];for(let x=n;x>0;x=Math.floor(x/256))a.unshift(x&255);return Buffer.from(a);};
+ const ebmlHeader=ebmlId(0x1a45dfa3,ebmlId(0x4282,Buffer.from('matroska')));
+ const infoEl=ebmlId(0x1549a966,ebmlId(0x2ad7b1,uintBuf(1000000)));
+ const videoTrackEl=ebmlId(0xae,Buffer.concat([ebmlId(0xd7,uintBuf(1)),ebmlId(0x83,uintBuf(1)),ebmlId(0x86,Buffer.from('V_MPEG4/ISO/AVC'))]));
+ const subTrackEl=ebmlId(0xae,Buffer.concat([ebmlId(0xd7,uintBuf(2)),ebmlId(0x83,uintBuf(17)),ebmlId(0x86,Buffer.from('S_TEXT/UTF8')),ebmlId(0x6d80,ebmlId(0x6240,ebmlId(0x5034,ebmlId(0x4254,uintBuf(0)))))]));
+ const tracksEl=ebmlId(0x1654ae6b,Buffer.concat([videoTrackEl,subTrackEl]));
+ const subBlock=(relMs,text)=>Buffer.concat([Buffer.from([0x82,(relMs>>8)&255,relMs&255,0]),zlib.deflateSync(Buffer.from(text,'utf8'))]);
+ const cluster1=ebmlId(0x1f43b675,Buffer.concat([ebmlId(0xe7,uintBuf(1000)),ebmlId(0xa0,Buffer.concat([ebmlId(0xa1,subBlock(500,'压缩字幕第一句')),ebmlId(0x9b,uintBuf(2000))]))]));
+ const cluster2=ebmlId(0x1f43b675,Buffer.concat([ebmlId(0xe7,uintBuf(65000)),ebmlId(0xa0,Buffer.concat([ebmlId(0xa1,subBlock(0,'超出一分钟后的字幕')),ebmlId(0x9b,uintBuf(2000))]))]));
+ const c1Pos=infoEl.length+tracksEl.length,c2Pos=c1Pos+cluster1.length,seekPosCues=c2Pos+cluster2.length;
+ const seekEntry=(id,pos)=>ebmlId(0x4dbb,Buffer.concat([ebmlId(0x53ab,uintBuf(id)),ebmlId(0x53ac,uintBuf(pos))]));
+ let seekHead=Buffer.alloc(0);for(let iter=0;iter<4;iter++){const off=seekHead.length;seekHead=ebmlId(0x114d9b74,Buffer.concat([seekEntry(0x1549a966,off),seekEntry(0x1654ae6b,off+infoEl.length),seekEntry(0x1c53bb6b,off+seekPosCues)]));}
+ const cuesFixed=ebmlId(0x1c53bb6b,Buffer.concat([ebmlId(0xbb,Buffer.concat([ebmlId(0xb3,uintBuf(1000)),ebmlId(0xb7,Buffer.concat([ebmlId(0xf7,uintBuf(1)),ebmlId(0xf1,uintBuf(seekHead.length+c1Pos))]))])),ebmlId(0xbb,Buffer.concat([ebmlId(0xb3,uintBuf(65000)),ebmlId(0xb7,Buffer.concat([ebmlId(0xf7,uintBuf(1)),ebmlId(0xf1,uintBuf(seekHead.length+c2Pos))]))]))]));
+ const zlibMkv=path.join(directory,'zlib-unindexed.mkv');
+ fs.writeFileSync(zlibMkv,Buffer.concat([ebmlHeader,ebmlId(0x18538067,Buffer.concat([seekHead,infoEl,tracksEl,cluster1,cluster2,cuesFixed]))]));
+ receiver.app.get('/zlib-unindexed.mkv',(req,res)=>res.sendFile(zlibMkv));
+ const {readMatroskaSubtitles}=require('../src/services/matroskaSubtitles');
+ const zlibRes=await readMatroskaSubtitles({url:base+'/zlib-unindexed.mkv',headers:{}},openUpstreamStream,AbortSignal.timeout(10000),{index:1,from:0,duration:40});
+ assert.deepEqual(zlibRes.cues.map(c=>c.text),['压缩字幕第一句'],'Zlib-compressed subtitles in video-only-Cues MKV decode cleanly and stop before the 65s cluster');
+ assert.ok(Math.abs(zlibRes.cues[0].start-1.5)<.05&&Math.abs(zlibRes.cues[0].end-3.5)<.05);
+ const noRangeState=state.setMedia({url:base+'/no-range.mkv',protocol:'Library',mediaType:'video',metadata:{title:'No-range MKV',mimeType:'video/x-matroska'},autoPlay:false});
+ const noRangeTracks=await fetch(base+'/api/media/tracks?sessionId='+noRangeState.sessionId).then(r=>r.json());
+ assert.equal(noRangeTracks.audio.length,2,'Non-206 HTTP 200 upstream still discovers tracks');
+ const noRangeSub=await fetch(base+'/api/media/subtitles',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({sessionId:noRangeState.sessionId,index:noRangeTracks.subtitles[0].index,position:0})});
+ assert.equal(noRangeSub.status,200);assert.ok((await noRangeSub.json()).cues.some(c=>c.text==='多音轨ASS字幕'),'Non-206 HTTP 200 upstream falls back to FFmpeg subtitles cleanly');
+ console.log('PASS: multi-audio MKV default/selected remux, ASS tag-only/drawing cues, zlib-compressed video-only-Cues MKV and HTTP 200 fallback');
  const pgsIndex=process.argv.indexOf('--pgs');
  if(pgsIndex>=0){
   const sample=path.resolve(process.argv[pgsIndex+1]);receiver.app.get('/pgs-fixture.mkv',(req,res)=>res.sendFile(sample));

@@ -18,6 +18,13 @@ assert.equal(websites.artplayerMedia('<script>const ad=new Artplayer({container:
     }
     if (req.url === '/quoted-region') { res.setHeader('Content-Type', 'text/html'); res.end('<h1>Movie title</h1><p>The story quotes Access denied by geographic restriction.</p>'); return; }
     if (req.url === '/region-stalled') { res.writeHead(403, { 'Content-Type': 'text/plain' }); res.write('Access denied by geographic restriction'); return; }
+    if (req.url === '/cf-challenge') { res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8', 'cf-mitigated': 'challenge' }); res.end('<!doctype html><html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>'); return; }
+    if (req.url === '/wangsu-challenge') { res.writeHead(403, { 'Content-Type': 'text/html; charset=utf-8' }); res.end('<!doctype html><html><head><title>Embed Iframe</title></head><body><div id="wss-captcha"></div><div>Before accessing the website, it is necessary to verify the security of the connection and browser environment.</div></body></html>'); return; }
+    if (req.url === '/cn-waf') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); res.end('<!doctype html><html><head><title>人机验证</title></head><body>请完成安全验证</body></html>'); return; }
+    if (req.url === '/nmys-play/vod-play-id-1-src-2-num-2.html') { res.setHeader('content-type', 'text/html'); res.end(`<script>var mac_from='a$$$b',mac_url='第1集$${base}/a.m3u8$$$第1集$${base}/b1.m3u8#第2集$${base}/good.m3u8';</script>`); return; }
+    if (req.url === '/maccms-play') { res.setHeader('content-type', 'text/html'); res.end(`<script>var player_aaaa={"from":"co","url":"co_fixture_123"};</script><script src="/static/js/playerconfig.js"></script>`); return; }
+    if (req.url === '/static/js/playerconfig.js') { res.setHeader('content-type', 'application/javascript'); res.end(`MacPlayerConfig.player_list={"co":{"parse":"${base}/frame?url="}};`); return; }
+    if (req.url === '/frame?url=co_fixture_123') { res.setHeader('content-type', 'text/html'); res.end(`<video src="${base}/good.m3u8"></video>`); return; }
     if(req.url==='/missing.m3u8'){res.writeHead(404).end('Gone');return;}
     if (req.url === '/play') { res.setHeader('content-type', 'text/html'); res.end('<iframe src="/frame?url=' + encodeURIComponent(base.replace('127.0.0.1', 'localhost') + '/good.m3u8') + '"></iframe>'); return; }
     if (req.url === '/art-player') { res.setHeader('content-type','text/html'); res.end(playerHtml);return; }
@@ -32,9 +39,32 @@ assert.equal(websites.artplayerMedia('<script>const ad=new Artplayer({container:
   try {
     const headers = { 'user-agent': 'FixtureBrowser/1' };
     for (const route of ['/region', '/region-ok', '/region-compressed']) await assert.rejects(resource(base + route), error => error.code === 'SOURCE_REGION_BLOCKED' && error.status === 403 && !error.verifyUrl);
+    for (const route of ['/cf-challenge', '/wangsu-challenge', '/cn-waf']) await assert.rejects(resource(base + route), error => error.code === 'SOURCE_VERIFY_REQUIRED' && error.status === 428 && error.verifyUrl === base + route);
     assert.ok((await resource(base + '/quoted-region')).text.includes('Movie title'), 'A film synopsis mentioning a restriction is not a denial page');
     await assert.rejects(resource(base + '/denied'), error => /HTTP 403/.test(error.message) && !error.code);
     const started=Date.now();await assert.rejects(resource(base+'/region-stalled'),error=>error.code==='SOURCE_REGION_BLOCKED');assert.ok(Date.now()-started<2500,'A stalled error body does not hold the source request for its full timeout');
+    const nmysPlay = await websites.resolve({ adapter: 'nmys', api: base, headers }, { id: base + '/nmys-play/vod-play-id-1-src-2-num-2.html' });
+    assert.equal(nmysPlay.url, base + '/good.m3u8', 'MacCMS v8 mac_url picks the exact line and episode direct HLS URL');
+    const macV10 = await websites.resolve({ adapter: 'newcz', api: base, headers }, { id: base + '/maccms-play' });
+    assert.equal(macV10.url, base + '/good.m3u8', 'MacCMS v10 player_aaaa resolves opaque IDs via playerconfig.js');
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const { SourceBrowser } = require('../src/content/browser');
+    const providers = require('../src/content/providers');
+    const sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mobiletv-session-'));
+    try {
+      const sb1 = new SourceBrowser(sessionDir);
+      sb1.saveSession('https://verify.example/path', 'cf_clearance=abc123', 'Mozilla/5.0 Edge/131.0');
+      const sb2 = new SourceBrowser(sessionDir);
+      const site = { api: 'https://verify.example/', headers: { 'user-agent': 'Chrome/Old' }, browser: sb2 };
+      await providers.syncCookies(site);
+      assert.equal(site.headers.cookie, 'cf_clearance=abc123', 'Verified cookies persist across browser restarts');
+      assert.equal(site.headers['user-agent'], 'Mozilla/5.0 Edge/131.0', 'Verified session propagates matching browser User-Agent');
+      const fixedSite = { api: 'https://verify.example/', headers: { 'user-agent': 'MobileOnly/1.0' }, fixedUserAgent: true, browser: sb2 };
+      await providers.syncCookies(fixedSite);
+      assert.equal(fixedSite.headers['user-agent'], 'MobileOnly/1.0', 'Sites requiring a fixed User-Agent keep it');
+      sb2.clearSession('https://verify.example/');
+      assert.equal(await sb2.sessionFor('https://verify.example/'), null, 'clearSession removes persisted session');
+    } finally { fs.rmSync(sessionDir, { recursive: true, force: true }); }
     assert.equal(await checkHls(base + '/good.m3u8', headers), base + '/good.m3u8');
     const sports={plugin:'Kanqiu',api:base,headers};
     await assert.rejects(extras.resolve(sports,{id:base+'/frame?url='+encodeURIComponent(base+'/missing.m3u8')}),/此直播线路暂不可用.*404.*其他线路/);

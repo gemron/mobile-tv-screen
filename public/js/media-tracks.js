@@ -42,7 +42,8 @@
         if(match){selected={...match,name:selected.name};captions(false);}else{off();window.MobileTVSubtitles?.clearEmbedded();}
       }
       const audio=data.audio[state.audioTrack??0];
-      if(automatic&&state.streamMode!=='transcode'&&audio&&['ac3','eac3','dts','truehd','mlp','wmav2'].includes(audio.codec)){
+      const remuxing=state.streamMode==='transcode'||window.MobileTVActiveStreamMode?.()==='transcode';
+      if(automatic&&!remuxing&&audio&&['ac3','eac3','dts','truehd','mlp','wmav2','wmapro','pcm_bluray','pcm_dvd','pcm_s24le','pcm_s32le','alac','mp2'].includes(audio.codec)){
         display({audioTrack:state.audioTrack??0,streamMode:'transcode'});window.MobileTVUI?.toast('已将 '+audio.codec.toUpperCase()+' 音轨转换为 AAC 立体声，保留视频画质');
       }
       return result;
@@ -60,21 +61,30 @@
     }
     if(state.burnSubtitle!=null)display({burnSubtitle:null});await captions(true);
   }
-  async function captions(close=false) {
+  async function captions(close=false,{targetPosition,exact=false}={}) {
     if(!selected||selected.kind!=='text')return;
-    const now=position(),from=Math.floor(now/20)*20,session=state?.sessionId,index=selected.index;
-    if(captionRequest?.from===from)return;
-    captionRequest?.abort();const controller=new AbortController();controller.from=from;captionRequest=controller;
+    const now=targetPosition!=null?targetPosition:position(),from=exact?Math.floor(now):Math.floor(now/20)*20,session=state?.sessionId,index=selected.index;
+    if(captionRequest?.from===from&&captionRequest?.exact===exact)return;
+    captionRequest?.abort();const controller=new AbortController();controller.from=from;controller.exact=exact;captionRequest=controller;
     captionMessage(close?'正在读取内置字幕…':'正在更新当前位置的字幕…',true);
     const deadline=setTimeout(()=>controller.abort(new DOMException('内置字幕读取超时，请点击语言重试','TimeoutError')),48000);
     try{
-      const result=await request('subtitles',{sessionId:session,index,position:now},controller.signal);
+      const result=await request('subtitles',{sessionId:session,index,position:now,...(exact?{exact:true}:{})},controller.signal);
       if(controller!==captionRequest||session!==state?.sessionId||index!==selected?.index)return;
       windowRange={from:result.from,to:result.to};retryAt=0;captionMessage(result.cues.length?'已加载内置字幕':'当前时间段没有对白，将在播放时自动更新');window.MobileTVSubtitles?.showEmbedded({...result,name:selected.name},close);
     }catch(error){if(error.name!=='AbortError'&&controller===captionRequest){retryAt=Infinity;captionMessage(error.message+'，点击语言可重试',false,true);}}
     finally{clearTimeout(deadline);if(controller===captionRequest)captionRequest=null;}
   }
-  const update=()=>{if(!selected||selected.kind!=='text'||captionRequest||Date.now()<retryAt)return;const now=position();if(!windowRange||now<windowRange.from||now>=windowRange.to-12)captions(false);};
+  const update=()=>{
+    if(!selected||selected.kind!=='text'||captionRequest||Date.now()<retryAt)return;
+    const now=position();
+    if(!windowRange||now<windowRange.from){captions(false);return;}
+    const span=Math.max(1,windowRange.to-windowRange.from),lead=Math.min(12,span/3);
+    if(now>=windowRange.to-lead){
+      const shortWindow=span<20;
+      captions(false,shortWindow?{targetPosition:Math.max(now,windowRange.to-1),exact:true}:{});
+    }
+  };
   video.addEventListener('timeupdate',update);video.addEventListener('seeking',()=>{captionRequest?.abort();captionRequest=null;windowRange=null;retryAt=0;update();});
   $('subtitleEmbeddedCancel').addEventListener('click',()=>{serial++;probe?.controller.abort();probe=null;$('mediaTracksRead').disabled=false;$('subtitleEmbeddedRead').disabled=false;captionRequest?.abort();captionRequest=null;retryAt=Infinity;captionMessage('已取消读取，点击语言可重试');});
   $('mediaTracksRead').addEventListener('click',()=>read());$('subtitleEmbeddedRead').addEventListener('click',()=>read());
@@ -87,7 +97,8 @@
       if(changed){serial++;probe?.controller.abort();probe=null;$('mediaTracksRead').disabled=false;$('subtitleEmbeddedRead').disabled=false;captionRequest?.abort();captionRequest=null;captionMessage();retryAt=0;if(nextMovie!==movie)selected=null;windowRange=null;data=null;identity=nextIdentity;movie=nextMovie;}
       state=next;if(changed)render();else $('mediaAudioTrack').value=next?.audioTrack==null?'':String(next.audioTrack);
       let decoded=next?.url||'';try{decoded=decodeURIComponent(decoded);}catch{}
-      if(nextIdentity&&!next.metadata?.isLive&&(/drive\.quark\.cn/i.test(decoded)||selected))read({automatic:true});
+      const isMkv=/matroska/i.test(next?.metadata?.mimeType||'')||/\.mkv(?:$|[?#&])/i.test(decoded);
+      if(nextIdentity&&!next.metadata?.isLive&&(/drive\.quark\.cn/i.test(decoded)||(isMkv&&next.streamMode!=='transcode')||selected))read({automatic:true});
     }
   };
   render();
