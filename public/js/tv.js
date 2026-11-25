@@ -55,6 +55,7 @@
     lblCurrentTime: $('lblCurrentTime'),
     lblDuration: $('lblDuration'),
     seekSlider: $('seekSlider'),
+    seekPreview: $('seekPreview'),
     seekTrack: $('seekTrack'),
     seekBuffered: $('seekBuffered'),
     seekPlayed: $('seekPlayed'),
@@ -100,6 +101,7 @@
   let isUserSeeking = false;
   let hudTimer = null;
   let viewportClickTimer = null;
+  const viewportClickDelay = (window.mobileTVDoubleClickMs || 500) + 50;
   let ignoreNextViewportClick = false;
   let lastTelemetrySentMs = 0;
   let lastFrameCount = 0;
@@ -289,6 +291,7 @@
 
   function destroyMediaEngines() {
     clearViewportClick();
+    els.seekPreview.hidden = true;
     remuxPlayer?.destroy();
     remuxPlayer = null;
     preparedRanges=[];remuxRequestId='';
@@ -567,10 +570,11 @@
 
     els.hudTitle.textContent = snap.metadata?.title || '正在投屏';
     els.hudTitle.title = els.hudTitle.textContent;
-    const protocolName=snap.protocol==='BilibiliCast'?'B站专用投屏':snap.protocol;
-    els.hudSubtitle.textContent = `${protocolName || 'Cast'} · ${snap.clientName || snap.clientIp || '局域网设备'}`;
+    const localPlayback = ['Library', 'Live'].includes(snap.protocol);
+    const protocolName = ({ BilibiliCast: 'B站投屏', Library: '影视片库', Live: '直播' })[snap.protocol] || snap.protocol;
+    els.hudSubtitle.textContent = localPlayback ? protocolName : `${protocolName || '投屏'} · ${snap.clientName || snap.clientIp || '局域网设备'}`;
     els.metricProto.textContent = protocolName || 'CAST';
-    if (els.btnStopCast.firstChild?.nodeType === 3) els.btnStopCast.firstChild.nodeValue = ['Library', 'Live'].includes(snap.protocol) ? '返回列表' : '结束投屏';
+    if (els.btnStopCast.firstChild?.nodeType === 3) els.btnStopCast.firstChild.nodeValue = localPlayback ? '返回列表' : '结束投屏';
     els.btnPlayPause.textContent = snap.status === 'PLAYING' ? '暂停' : '播放';
     els.selectStreamMode.value = activeStreamMode;
     els.selectRate.value = String(snap.playbackRate || 1);
@@ -690,7 +694,7 @@
     els.historyCountChip.textContent = `${items.length} 条记录`;
     if (!items.length) {
       els.historyList.innerHTML =
-        '<div class="empty-state"><svg class="icon"><use href="/icons.svg#clock" /></svg><p>还没有播放记录</p><span>你的下一次大屏体验，从这里开始。</span></div>';
+        '<div class="empty-state"><svg class="icon" aria-hidden="true"><use href="/icons.svg#clock" /></svg><p>还没有投屏记录</p></div>';
       return;
     }
     els.historyList.innerHTML = '';
@@ -1070,18 +1074,30 @@
     if (res.ok) updateDeviceUi(await res.json());
   });
 
-  els.btnQuickCast.addEventListener('click', () => {
+  const quickCastHint = $('quickCastHint');
+  const defaultQuickCastHint = quickCastHint.textContent;
+  els.quickUrlInput.addEventListener('input', () => {
+    quickCastHint.classList.remove('error');
+    quickCastHint.textContent = defaultQuickCastHint;
+    els.quickUrlInput.removeAttribute('aria-invalid');
+  });
+  els.btnQuickCast.addEventListener('click', async () => {
     const url = els.quickUrlInput.value.trim();
-    if (!url) {
+    let address;
+    try { address = new URL(url); } catch {}
+    if (!address || !['http:', 'https:'].includes(address.protocol)) {
+      els.quickUrlInput.setAttribute('aria-invalid', 'true');
+      quickCastHint.textContent = url ? '请输入有效的 HTTP 或 HTTPS 媒体链接。' : '请先粘贴媒体链接。';
+      quickCastHint.classList.add('error');
       els.quickUrlInput.focus();
-      window.MobileTVUI?.toast('请先粘贴媒体链接');
       return;
     }
-    if (!/^https?:\/\//i.test(url)) {
-      window.MobileTVUI?.toast('请输入以 http:// 或 https:// 开头的媒体链接');
-      return;
+    els.btnQuickCast.disabled = true;
+    try {
+      await postControl({ action: 'cast', url });
+    } finally {
+      els.btnQuickCast.disabled = false;
     }
-    postControl({ action: 'cast', url });
   });
 
   els.btnTestDlna.addEventListener('click', () => {
@@ -1125,6 +1141,19 @@
     isUserSeeking = false;
     postControl({ action: 'seek', position: Number(els.seekSlider.value) });
   });
+  els.seekSlider.addEventListener('pointermove', event => {
+    const duration = playbackDuration();
+    if (!Number.isFinite(duration) || duration <= 0 || event.pointerType === 'touch') return;
+    const { left, width } = els.seekSlider.getBoundingClientRect();
+    if (!width) return;
+    const ratio = Math.max(0, Math.min(1, (event.clientX - left) / width));
+    els.seekPreview.textContent = formatSec(duration * ratio);
+    els.seekPreview.style.left = `clamp(33px, ${ratio * 100}%, 100% - 33px)`;
+    els.seekPreview.hidden = false;
+  });
+  for (const type of ['pointerleave', 'pointercancel', 'blur']) {
+    els.seekSlider.addEventListener(type, () => { els.seekPreview.hidden = true; });
+  }
 
   els.volumeSlider.addEventListener('input', () => {
     postControl({ action: 'volume', volume: Number(els.volumeSlider.value) });
@@ -1179,6 +1208,16 @@
 
   els.btnFullscreen.addEventListener('click', toggleFullscreen);
   els.btnStandbyFullscreen.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', () => {
+    const active = Boolean(document.fullscreenElement);
+    const label = active ? '退出全屏' : '全屏';
+    for (const button of [els.btnFullscreen, els.btnStandbyFullscreen]) {
+      button.querySelector('span').textContent = label;
+      button.title = label + ' (F)';
+      button.setAttribute('aria-label', label);
+    }
+    wakeHud();
+  });
 
   document.addEventListener('keydown', (event) => {
     if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
@@ -1236,17 +1275,22 @@
       || els.logDrawer.classList.contains('open')
     );
   }, true);
+  els.mediaViewport.addEventListener('mousedown', (event) => {
+    // Chromium counts clicks on mouse-down. The second button can remain held
+    // past the deadline before click and dblclick arrive on mouse-up.
+    if (event.button === 0 && event.detail === 2 && viewportClickTimer !== null) clearTimeout(viewportClickTimer);
+  });
   els.mediaViewport.addEventListener('click', (event) => {
     const dismissedOverlay = ignoreNextViewportClick;
     ignoreNextViewportClick = false;
     if (event.target !== els.bufferingPill) els.playerStage.focus({ preventScroll: true });
-    if (dismissedOverlay || event.target === els.bufferingPill || event.target?.closest?.('button, a, input, select, summary')) return;
-    if (!currentState || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
-    if (!['video', 'audio'].includes(currentState.mediaType)) return;
-    if (event.detail > 1) {
+    if (dismissedOverlay || event.target === els.bufferingPill || event.target?.closest?.('button, a, input, select, summary')) {
       clearViewportClick();
       return;
     }
+    if (!currentState || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
+    if (!['video', 'audio'].includes(currentState.mediaType)) return;
+    if (event.detail > 1) return;
     clearViewportClick();
     const sessionId = currentState.sessionId;
     viewportClickTimer = setTimeout(() => {
@@ -1254,13 +1298,15 @@
       if (!currentState || currentState.sessionId !== sessionId || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
       postControl({ action: currentState.status === 'PLAYING' ? 'pause' : 'play' });
       wakeHud();
-    }, 220);
+    }, viewportClickDelay);
   });
   els.mediaViewport.addEventListener('dblclick', (event) => {
+    const pendingClick = viewportClickTimer !== null;
     clearViewportClick();
     ignoreNextViewportClick = false;
     if (event.target === els.bufferingPill || event.target?.closest?.('button, a, input, select, summary')) return;
     if (!currentState || !['PLAYING', 'PAUSED', 'LOADING'].includes(currentState.status)) return;
+    if (['video', 'audio'].includes(currentState.mediaType) && !pendingClick) return;
     toggleFullscreen();
     wakeHud();
   });

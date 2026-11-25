@@ -13,7 +13,7 @@
 
 [下载安装包](https://github.com/gemron/mobile-tv-screen/releases/latest) · [使用指南](#快速开始) · [常见问题](#常见问题) · [参与开发](CONTRIBUTING.md) · [反馈问题](https://github.com/gemron/mobile-tv-screen/issues)
 
-当前版本 **1.5.0**（2026-11-22）提供 Windows x64 离线安装包（145.29 MiB）、在线安装器（2.76 MiB）和便携 ZIP（204.62 MiB）。[下载与更新说明](https://github.com/gemron/mobile-tv-screen/releases/tag/v1.5.0)
+当前版本 **1.5.1**（2026-11-26）重做了投屏首页、片库、播放器和手机遥控，提供 Windows x64 离线安装包、在线安装器和便携 ZIP。[下载与更新说明](https://github.com/gemron/mobile-tv-screen/releases/tag/v1.5.1)
 
 </div>
 
@@ -271,6 +271,10 @@ npm run start:server
 ```
 
 ## 构建与验证
+
+### GitHub Actions 自动发布
+
+提交一致的 `package.json` 和 `package-lock.json` 版本号，再推送对应的 `vX.Y.Z` 标签。Windows 任务会编译并测试便携包和两种安装器，随后发布带 SHA-256 校验清单的 GitHub Release。可在 `docs/releases/vX.Y.Z.md` 编写发布说明，工作流也支持手动运行以生成测试附件。
 
 ### Windows 发行构建
 

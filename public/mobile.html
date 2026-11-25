@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#eef5f2" />
+  <meta name="theme-color" content="#f5f3ef" />
   <title>手机遥控 · MobileTV</title>
   <link rel="icon" href="/favicon.svg" />
   <link rel="stylesheet" href="/css/style.css" />
@@ -20,7 +20,7 @@
   </nav>
 
   <section class="panel active" id="tab-remote" role="tabpanel" aria-labelledby="nav-remote">
-    <div class="now-playing"><div class="remote-screen" aria-hidden="true"><svg class="icon"><use href="/icons.svg#screen" /></svg><span class="remote-screen-dot"></span></div><span class="mini-label" id="nowCaption">准备就绪</span><h2 class="now-title" id="nowTitle">等待你的下一次投屏</h2><div class="now-meta" id="nowMeta">从视频 App、链接或手机文件开始</div></div>
+    <div class="now-playing"><div class="remote-screen" aria-hidden="true"><svg class="icon"><use href="/icons.svg#screen" /></svg></div><span class="mini-label" id="nowCaption" hidden></span><h2 class="now-title" id="nowTitle">等待投屏</h2><div class="now-meta" id="nowMeta">从视频 App、链接或手机文件开始</div></div>
     <label class="remote-label" for="seekBar"><span>播放进度</span><span id="timeLabel">00:00 / 00:00</span></label><input class="slider" id="seekBar" type="range" min="0" max="100" value="0" aria-label="播放进度" />
     <div class="transport-controls"><button class="btn" id="btnRewind" title="后退 15 秒"><svg class="icon"><use href="/icons.svg#rewind" /></svg><span>15 秒</span></button><button class="btn btn-primary" id="btnPlayPause">播放</button><button class="btn" id="btnForward" title="前进 15 秒"><svg class="icon"><use href="/icons.svg#forward" /></svg><span>15 秒</span></button></div>
     <div class="volume-section"><label class="remote-label" for="volBar"><span>大屏音量</span><span><span id="volLabel">80</span>%</span></label><div class="row"><button class="btn" id="btnMute">静音</button><input class="slider" id="volBar" type="range" min="0" max="100" value="80" aria-label="大屏音量" /></div></div>
@@ -28,7 +28,7 @@
   </section>
 
   <section class="panel" id="tab-url" role="tabpanel" aria-labelledby="nav-url" hidden>
-    <div class="panel-heading"><span class="feature-icon"><svg class="icon"><use href="/icons.svg#link" /></svg></span><h2>一个链接，连接大屏</h2><p>视频、直播或图片，粘贴后即可投屏。</p></div>
+    <div class="panel-heading"><span class="feature-icon"><svg class="icon"><use href="/icons.svg#link" /></svg></span><h2>链接投屏</h2><p>粘贴视频、直播或图片的直链。</p></div>
     <label class="label" for="castUrlInput">媒体链接</label><input class="input" id="castUrlInput" type="url" placeholder="https://example.com/video.mp4" autocomplete="off" />
     <label class="label" for="castTitleInput">显示标题 <span>可选</span></label><input class="input" id="castTitleInput" type="text" placeholder="为这次播放起个名字" />
     <label class="label" for="castModeSelect">连接方式</label><select id="castModeSelect"><option value="auto">自动选择（推荐）</option><option value="direct">直接连接</option><option value="transcode">格式兼容（保留视频）</option></select>
@@ -36,13 +36,13 @@
   </section>
 
   <section class="panel" id="tab-local" role="tabpanel" aria-labelledby="nav-local" hidden>
-    <div class="panel-heading"><span class="feature-icon"><svg class="icon"><use href="/icons.svg#upload" /></svg></span><h2>手机里的，也能大屏看</h2><p>选择一段视频、一张照片或一首音乐。</p></div>
+    <div class="panel-heading"><span class="feature-icon"><svg class="icon"><use href="/icons.svg#upload" /></svg></span><h2>文件投屏</h2><p>选择手机里的视频、照片或音乐。</p></div>
     <div class="file-picker"><label for="localFileInput">选择手机文件</label><input class="input" id="localFileInput" type="file" accept="video/*,image/*,audio/*" /></div><button class="btn btn-primary full-width" id="btnUploadCast">上传并投屏<svg class="icon"><use href="/icons.svg#arrow" /></svg></button>
     <div class="progress-bar" id="uploadProgressBar"><div class="progress-fill" id="uploadProgressFill"></div></div><p class="hint" id="uploadHint" role="status">文件通过当前局域网传送到电脑，不经过外网服务器。</p>
   </section>
 
   <section class="panel" id="tab-mirror" role="tabpanel" aria-labelledby="nav-mirror" hidden>
-    <div class="panel-heading"><span class="feature-icon"><svg class="icon"><use href="/icons.svg#screen" /></svg></span><h2>分享此刻的画面</h2><p>把屏幕或相机画面实时分享给大屏。</p></div><div class="mirror-actions"><button class="btn" id="btnMirrorScreen"><svg class="icon"><use href="/icons.svg#screen" /></svg>共享屏幕</button><button class="btn" id="btnMirrorCamera"><svg class="icon"><use href="/icons.svg#camera" /></svg>分享相机</button></div><button class="btn btn-danger full-width" id="btnStopMirror" style="display:none">停止共享</button><p class="hint" id="mirrorHint" role="status">屏幕和相机共享需要浏览器支持与安全连接；不可用时可使用链接或文件投屏。</p>
+    <div class="panel-heading"><span class="feature-icon"><svg class="icon"><use href="/icons.svg#screen" /></svg></span><h2>屏幕与相机</h2><p>把屏幕或相机画面实时分享给大屏。</p></div><div class="mirror-actions"><button class="btn" id="btnMirrorScreen"><svg class="icon"><use href="/icons.svg#screen" /></svg>共享屏幕</button><button class="btn" id="btnMirrorCamera"><svg class="icon"><use href="/icons.svg#camera" /></svg>分享相机</button></div><button class="btn btn-danger full-width" id="btnStopMirror" style="display:none">停止共享</button><p class="hint" id="mirrorHint" role="status">屏幕和相机共享需要浏览器支持与安全连接；不可用时可使用链接或文件投屏。</p>
   </section>
   <footer class="mobile-footer"><svg class="icon"><use href="/icons.svg#wifi" /></svg>MobileTV · 仅供学习研究，禁止商业售卖</footer><div class="toast" id="toast" role="status" aria-live="polite"></div>
   <script src="/js/ui.js"></script><script src="/js/mobile.js"></script>

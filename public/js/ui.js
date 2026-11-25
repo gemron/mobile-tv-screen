@@ -40,7 +40,7 @@
   }
   function syncFrameColor() {
     const dark = document.documentElement.dataset.theme === 'dark' || document.body.classList.contains('casting-active');
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#14221f' : '#eef5f2');
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#14131a' : '#f5f3ef');
   }
   window.MobileTVUI = { toast, updateTitle };
 

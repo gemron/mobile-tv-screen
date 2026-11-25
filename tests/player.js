@@ -19,7 +19,7 @@ castState.stop('Test');
 
 // Run the actual TV script with browser boundaries stubbed. Inspect the URL
 // handed to the media engine rather than duplicating the routing implementation.
-function createPlayer({ hls = false, now = () => performance.now(), origin = 'http://127.0.0.1:8080' } = {}) {
+function createPlayer({ hls = false, now = () => performance.now(), origin = 'http://127.0.0.1:8080', doubleClickMs } = {}) {
   const elements = new Map();
   const intervals = [];
   const hlsSources = [];
@@ -54,7 +54,8 @@ function createPlayer({ hls = false, now = () => performance.now(), origin = 'ht
     },
     addEventListener(event, handler) { documentEvents[event] = handler; },
     querySelector() { return null; },
-    documentElement: { requestFullscreen() { fullscreenCalls += 1; return Promise.resolve(); } },
+    documentElement: { requestFullscreen() { fullscreenCalls += 1; document.fullscreenElement = this; return Promise.resolve(); } },
+    exitFullscreen() { fullscreenCalls += 1; document.fullscreenElement = null; return Promise.resolve(); },
   };
   class FakeWebSocket {
     static OPEN = 1;
@@ -76,7 +77,7 @@ function createPlayer({ hls = false, now = () => performance.now(), origin = 'ht
   }
   const context = vm.createContext({
     document,
-    window: { addEventListener() {}, ...(hls ? { Hls: FakeHls } : {}) },
+    window: { addEventListener() {}, mobileTVDoubleClickMs: doubleClickMs, ...(hls ? { Hls: FakeHls } : {}) },
     location: new URL(origin),
     URL,
     WebSocket: FakeWebSocket,
@@ -94,6 +95,12 @@ function createPlayer({ hls = false, now = () => performance.now(), origin = 'ht
     sent,
     runInterval(ms) { for (const interval of intervals) if (interval.ms === ms) interval.fn(); },
     runTimers(ms) { for (const [id, timer] of [...timers]) if (timer.ms === ms) { timers.delete(id); timer.fn(); } },
+    advanceTimers(ms) {
+      for (const [id, timer] of [...timers]) {
+        timer.ms -= ms;
+        if (timer.ms <= 0 && timers.delete(id)) timer.fn();
+      }
+    },
     seek(position) { socket.onmessage({ data: JSON.stringify({ type: 'command', data: { type: 'seek', position } }) }); },
     progress(data) { socket.onmessage({ data: JSON.stringify({ type: 'progress', data }) }); },
     get fullscreenCalls() { return fullscreenCalls; },
@@ -412,31 +419,59 @@ const loads=unknownVideo.loadCalls;unknownLength.cast('/fixture.mp4','transcode'
 assert.equal(unknownVideo.loadCalls,loads,'Source duration updates do not restart playback');assert.equal(unknownLength.elements.get('seekSlider').max,600);
 unknownVideo.listeners.progress();assert.ok(unknownLength.elements.get('seekBuffered').style.background.includes('#557e78 26.6667%'));
 console.log('PASS: unknown source length never caps the prepared timeline; source duration updates the seek bar without reloading media');
+const hoverTest = createPlayer();
+hoverTest.cast('/fixture.mp4', 'direct', 'video', { duration: 120, metadata: { duration: 120 } });
+const hoverSlider = hoverTest.elements.get('seekSlider');
+const seekPreview = hoverTest.elements.get('seekPreview');
+hoverSlider.getBoundingClientRect = () => ({ left: 100, width: 400 });
+hoverSlider.listeners.pointermove({ pointerType: 'mouse', clientX: 200 });
+assert.equal(seekPreview.textContent, '00:30', 'Hover previews the time under the pointer');
+assert.equal(seekPreview.hidden, false);
+assert.ok(!hoverTest.sent.some(message => message.type === 'control'), 'Hover does not request a seek');
+hoverSlider.listeners.pointerleave();
+assert.equal(seekPreview.hidden, true);
 const viewportTest = createPlayer();
 const vpVideo = viewportTest.cast('/fixture.mp4', 'direct', 'video', { status: 'PLAYING' });
 const vp = viewportTest.elements.get('mediaViewport');
 vp.listeners.pointerdown({ button: 0, target: vpVideo });
 vp.listeners.click({ target: vpVideo, detail: 1 });
 assert.equal(viewportTest.sent.filter(m => m.type === 'control').length, 0, 'Single click waits briefly so a double click does not toggle pause');
-viewportTest.runTimers(220);
+viewportTest.advanceTimers(550);
 assert.equal(viewportTest.sent.filter(m => m.type === 'control').at(-1)?.data?.action, 'pause', 'Single click on video pauses playback');
 viewportTest.cast('/fixture.mp4', 'direct', 'video', { status: 'PAUSED' });
 vp.listeners.pointerdown({ button: 0, target: vpVideo });
 vp.listeners.click({ target: vpVideo, detail: 1 });
-viewportTest.runTimers(220);
+viewportTest.advanceTimers(550);
 assert.equal(viewportTest.sent.filter(m => m.type === 'control').at(-1)?.data?.action, 'play', 'Single click on paused video resumes playback');
 const beforeDblControls = viewportTest.sent.filter(m => m.type === 'control').length;
-vp.listeners.pointerdown({ button: 0, target: vpVideo });
-vp.listeners.click({ target: vpVideo, detail: 1 });
-vp.listeners.click({ target: vpVideo, detail: 2 });
-vp.listeners.dblclick({ target: vpVideo });
-viewportTest.runTimers(220);
-assert.equal(viewportTest.fullscreenCalls, 1, 'Double click on video toggles fullscreen');
+for (const status of ['PLAYING', 'PAUSED']) {
+  viewportTest.cast('/fixture.mp4', 'direct', 'video', { status });
+  vp.listeners.pointerdown({ button: 0, target: vpVideo });
+  vp.listeners.click({ target: vpVideo, detail: 1 });
+  viewportTest.advanceTimers(440);
+  vp.listeners.mousedown({ button: 0, detail: 2 });
+  viewportTest.advanceTimers(300);
+  vp.listeners.click({ target: vpVideo, detail: 2 });
+  vp.listeners.dblclick({ target: vpVideo });
+  viewportTest.advanceTimers(550);
+}
+assert.equal(viewportTest.fullscreenCalls, 2, 'Double clicks enter and exit fullscreen');
 assert.equal(viewportTest.sent.filter(m => m.type === 'control').length, beforeDblControls, 'Double click cancels pending single-click pause');
 viewportTest.elements.get('playerOptions').open = true;
 vp.listeners.pointerdown({ button: 0, target: vpVideo });
 viewportTest.elements.get('playerOptions').open = false;
 vp.listeners.click({ target: vpVideo, detail: 1 });
-viewportTest.runTimers(220);
+viewportTest.advanceTimers(550);
 assert.equal(viewportTest.sent.filter(m => m.type === 'control').length, beforeDblControls, 'Dismissing player options by clicking video does not pause playback');
 console.log('PASS: single-click video toggles pause/play, double-click toggles fullscreen without pausing, and overlay dismissal does not pause');
+const slowMouse = createPlayer({ doubleClickMs: 1000 });
+const slowVideo = slowMouse.cast('/fixture.mp4', 'direct', 'video');
+const clicks = slowMouse.elements.get('mediaViewport').listeners;
+clicks.click({ target: slowVideo, detail: 1 });
+slowMouse.advanceTimers(850);
+clicks.mousedown({ button: 0, detail: 2 });
+clicks.click({ target: slowVideo, detail: 2 });
+clicks.dblclick({ target: slowVideo });
+slowMouse.advanceTimers(1050);
+assert.equal(slowMouse.fullscreenCalls, 1);
+assert.equal(slowMouse.sent.filter(message => message.type === 'control').length, 0);

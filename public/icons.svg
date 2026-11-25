@@ -22,4 +22,5 @@
 <symbol id="log" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 8h8m-8 4h8m-8 4h5"/></symbol>
 <symbol id="rewind" viewBox="0 0 24 24"><path d="M3 10a9 9 0 1 1 2 8M3 4v6h6"/></symbol>
 <symbol id="forward" viewBox="0 0 24 24"><path d="M21 10a9 9 0 1 0-2 8m2-14v6h-6"/></symbol>
+  <symbol id="search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.3"/><path d="m16 16 4 4"/></symbol>
 </svg>

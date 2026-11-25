@@ -67,6 +67,26 @@
   function begin() { cancelEpisodeRequest(); state.fetching?.abort(); $('libraryCancelSearch').hidden = true; state.fetching = new AbortController(); return { id: ++state.request, signal: state.fetching.signal }; }
   function report(error) { if (error.name !== 'AbortError') status(error.message, true); }
   function placeholder(message) { $('libraryResults').classList.remove('is-schedule'); $('libraryScheduleFilters').hidden = true; $('libraryResults').replaceChildren(node('div', 'library-empty', message)); $('libraryPager').hidden = true; }
+  function subscriptionPrompt(container, live = false) {
+    const panel = node('div', 'library-empty library-setup');
+    const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    icon.setAttribute('class', 'icon');
+    icon.setAttribute('aria-hidden', 'true');
+    const use = document.createElementNS(icon.namespaceURI, 'use');
+    use.setAttribute('href', '/icons.svg#' + (live ? 'screen' : 'play'));
+    icon.append(use);
+    const button = node('button', 'btn btn-primary', '添加订阅');
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      $('libraryManageSources').click();
+      $('librarySourceUrl').focus();
+    });
+    const content = node('div', 'library-setup-content');
+    content.append(icon, node('h2', '', live ? '还没有直播源' : '还没有影视片源'),
+      node('p', '', live ? '添加 M3U、TXT 或 JSON 直播订阅后即可浏览频道。' : '添加 TVBox 或兼容订阅，开始浏览和搜索影片。'), button);
+    panel.append(content);
+    container.replaceChildren(panel);
+  }
   function syncSearchUi() {
     const site=state.config?.sites.find(item=>item.key===state.site),discovery=Boolean(site?.discovery);
     if(discovery)$('librarySearchAll').checked=true;
@@ -86,7 +106,16 @@
     for (const button of document.querySelectorAll('[data-library-nav]')) { const active = button.dataset.libraryNav === mode; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); }
     try { localStorage.setItem('mobiletv-section', mode); } catch {}
     state.shelf = 'browse'; renderShelf();
-    if (mode === 'vod') { $('libraryTitle').textContent = '影视片库'; if (state.site) loadHome(); else placeholder('先添加订阅地址，选择一个已适配的站点。'); }
+    if (mode === 'vod') {
+      $('libraryTitle').textContent = '影视片库';
+      if (state.site) loadHome();
+      else if (!state.config?.url) {
+        status('');
+        placeholder('');
+        subscriptionPrompt($('libraryResults'));
+      }
+      else placeholder('此订阅没有可用的点播站点。请在片源管理中切换订阅。');
+    }
     if (mode === 'live') { $('libraryTitle').textContent = '直播电视'; if (state.liveSource) loadChannels(); else renderChannels(); }
   }
 
@@ -532,7 +561,11 @@
     const channels = state.channels.filter((channel, index) => (!group || group === channel.group) && (!keyword || channel.name.toLowerCase().includes(keyword) || String(index + 1) === keyword) && (!state.liveFavorites || isFavorite({ kind: 'live', sourceKey: state.liveSource, channelId: channel.id })));
     $('libraryChannelList').replaceChildren();
     $('libraryMoreChannels').hidden = channels.length <= state.channelLimit;
-    if (!channels.length) { $('libraryChannelList').append(node('p', 'library-empty', state.channels.length ? '没有找到匹配频道' : '添加订阅地址并选择直播源')); return; }
+    if (!channels.length) {
+      if (!state.liveSource) subscriptionPrompt($('libraryChannelList'), true);
+      else $('libraryChannelList').append(node('p', 'library-empty', state.channels.length ? '没有找到匹配频道' : '当前直播源没有可用频道'));
+      return;
+    }
     for (const channel of channels.slice(0, state.channelLimit)) {
       const row = node('article', 'live-channel-row'), button = node('button', 'live-channel'), info = node('div'), number = node('span', 'live-channel-number', String(state.channels.indexOf(channel) + 1).padStart(2, '0'));
       row.dataset.channel = channel.id;
@@ -610,7 +643,29 @@
     catch (error) { if (!automatic || !/边界/.test(error.message)) toast(error.message);return false; }
   }
 
-  for (const button of document.querySelectorAll('[data-library-nav]')) button.addEventListener('click', () => setMode(button.dataset.libraryNav));
+  function navigateTo(mode) {
+    setMode(mode);
+    window.scrollTo(0, 0);
+    $(mode === 'cast' ? 'castTitle' : 'libraryTitle').focus({ preventScroll: true });
+  }
+  for (const button of document.querySelectorAll('[data-library-nav]')) {
+    button.addEventListener('click', () => navigateTo(button.dataset.libraryNav));
+  }
+  $('openFilmLibrary').addEventListener('click', () => navigateTo('vod'));
+  $('brandHome').addEventListener('click', event => {
+    if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    navigateTo('cast');
+  });
+  document.addEventListener('keydown', event => {
+    if (event.defaultPrevented || event.key !== '/' || event.isComposing || event.ctrlKey || event.metaKey || event.altKey ||
+        state.mode === 'cast' || state.playerVisible || document.querySelector('dialog[open], #logDrawer.open') ||
+        event.target.closest?.('input, select, textarea, [contenteditable]')) return;
+    const search = state.shelf !== 'browse' ? $('libraryCollectionSearch') : $(state.mode === 'live' ? 'libraryLiveSearch' : 'librarySearch');
+    if (!search.getClientRects().length) return;
+    event.preventDefault();
+    search.focus();
+  });
   for (const button of document.querySelectorAll('[data-library-shelf]')) button.addEventListener('click', () => { begin(); state.shelf = button.dataset.libraryShelf; renderShelf(); if (state.shelf !== 'browse') refreshCollection().catch(report); else if (state.mode === 'live') loadChannels(); else loadHome(); });
   $('librarySavedSource').addEventListener('change', () => switchSource($('librarySavedSource').value));
   $('libraryManageSources').addEventListener('click', () => { $('librarySourceStatus').textContent = ''; $('librarySourcesDialog').showModal(); });

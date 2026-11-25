@@ -20,11 +20,12 @@
     if (!snap) return;
     state = snap;
     const isIdle = !snap.status || snap.status === 'IDLE' || snap.status === 'STOPPED';
-    $('nowTitle').textContent = isIdle ? '等待你的下一次投屏' : snap.metadata?.title || '投屏播放中';
-    $('nowCaption').textContent = isIdle ? '准备就绪' : snap.status === 'PLAYING' ? '正在播放' : snap.status === 'LOADING' ? '正在加载' : '已暂停';
+    $('nowTitle').textContent = isIdle ? '等待投屏' : snap.metadata?.title || '投屏播放中';
+    $('nowCaption').hidden = isIdle;
+    $('nowCaption').textContent = snap.status === 'PLAYING' ? '正在播放' : snap.status === 'LOADING' ? '正在加载' : '已暂停';
     $('nowMeta').textContent = isIdle
       ? '从视频 App、链接或手机文件开始'
-      : `${snap.protocol || 'Cast'} · ${snap.status === 'PLAYING' ? '播放中' : '已暂停'}`;
+      : ({ Library: '影视片库', Live: '直播', BilibiliCast: 'B站投屏' })[snap.protocol] || snap.protocol || '投屏';
     $('btnPlayPause').textContent = snap.status === 'PLAYING' ? '暂停' : '播放';
 
     $('volBar').value = String(snap.volume ?? 80);

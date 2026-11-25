@@ -1,17 +1,38 @@
-name: Build Windows release
+name: Build and publish Windows release
 
 on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   windows:
+    if: github.event_name != 'push' || !github.event.deleted
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Verify release tag matches package version
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $package = Get-Content package.json -Raw | ConvertFrom-Json
+          $lock = Get-Content package-lock.json -Raw | ConvertFrom-Json -AsHashtable
+          if ($env:GITHUB_REF_NAME -cne "v$($package.version)" -or
+              $lock.version -cne $package.version -or
+              $lock.packages[''].version -cne $package.version) {
+            throw "Release tag and package versions must match"
+          }
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.14.0
@@ -36,3 +57,44 @@ jobs:
             dist/*-Setup-x64.exe
             dist/*.sha256
             dist/SHA256SUMS.txt
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: windows
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: MobileTV-windows-x64
+          path: dist
+      - name: Verify and publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          shopt -s nullglob
+          portable=(dist/MobileTV-"$version"-win-x64-*.zip)
+          if [[ ${#portable[@]} -ne 1 ]]; then
+            echo "Expected exactly one portable ZIP for $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          offline="MobileTV-$version-Setup-x64.exe"
+          online="MobileTV-$version-Online-Setup-x64.exe"
+          assets=("${portable[0]}" "dist/$offline" "dist/$online" dist/SHA256SUMS.txt)
+          (
+            cd dist
+            diff <(cut -d' ' -f3- SHA256SUMS.txt | sort) <(printf '%s\n' "${portable[0]##*/}" "$offline" "$online" | sort)
+            sha256sum --check --strict SHA256SUMS.txt
+          )
+          notes=(--generate-notes)
+          if [[ -f "docs/releases/$GITHUB_REF_NAME.md" ]]; then
+            notes=(--notes-file "docs/releases/$GITHUB_REF_NAME.md")
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "MobileTV $version" "${notes[@]}"

@@ -10,18 +10,29 @@
 .tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; padding: 5px; border: 1px solid var(--border-subtle); border-radius: 14px; background: var(--surface-soft); margin-bottom: 20px; }
 .tab-btn { display: flex; justify-content: center; align-items: center; gap: 7px; min-height: 43px; border: 0; background: transparent; color: var(--text-secondary); border-radius: 10px; font-size: 12px; }
 .tab-btn .icon { width: 17px; height: 17px; }
-.tab-btn.active { background: var(--surface); color: var(--accent); box-shadow: 0 2px 5px #20313b09; font-weight: 600; }
+.tab-btn.active { background: var(--accent-soft); color: var(--accent); font-weight: 700; }
 .panel { display: none; background: var(--surface); border: 1px solid var(--border-subtle); border-radius: 20px; padding: 25px; box-shadow: var(--shadow); }
 .panel.active { display: block; }
-.now-playing { display: flex; flex-direction: column; align-items: center; text-align: center; min-height: 215px; padding: 0 0 23px; margin-bottom: 23px; border-bottom: 1px solid var(--border-subtle); }
-.remote-screen { display: grid; place-items: center; width: 104px; height: 92px; position: relative; color: var(--accent); margin: 3px 0 14px; background: var(--accent-soft); border-radius: 22px; }
-.remote-screen .icon { width: 56px; height: 56px; stroke-width: 1; }
-.remote-screen-dot { position: absolute; right: 17px; top: 15px; width: 7px; height: 7px; border: 2px solid var(--surface); border-radius: 50%; background: var(--accent); }
-.now-title { font-size: 17px; margin: 6px 0; line-height: 1.6; overflow-wrap: anywhere; }
-.now-meta { font-size: 11px; color: var(--text-muted); }
+.now-playing {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  min-height: 174px;
+  padding: 20px;
+  margin: -9px -9px 21px;
+  border-radius: 15px;
+  color: #fffcfa;
+  background: linear-gradient(90deg,#141020ed,#19162866), #211b33 url('/images/cast-lake.webp') center / cover no-repeat;
+}
+.remote-screen { display: grid; place-items: center; width: 36px; height: 36px; color: #e4d3ff; background: #ffffff24; border-radius: 10px; margin-bottom: 10px; }
+.remote-screen .icon { width: 20px; height: 20px; }
+.now-playing .mini-label, .now-meta { color: #e9e0f2; }
+.now-title { font-size: 22px; margin: 3px 0; line-height: 1.3; overflow-wrap: anywhere; }
+.now-meta { font-size: 12px; }
 .remote-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 11px; color: var(--text-secondary); margin-bottom: 10px; }
 #timeLabel, #volLabel { font-variant-numeric: tabular-nums; }
-.slider { width: 100%; min-width: 0; height: 5px; }
+.slider { width: 100%; min-width: 0; min-height: 24px; }
 .transport-controls { display: grid; grid-template-columns: 1fr 1.3fr 1fr; gap: 12px; align-items: center; margin: 23px 0 27px; }
 .transport-controls .btn { flex-direction: column; gap: 2px; border: 0; font-size: 10px; min-height: 60px; background: var(--surface-soft); }
 .transport-controls .btn-primary { background: var(--primary); color: #fff; font-size: 15px; font-weight: 600; border-radius: 18px; }

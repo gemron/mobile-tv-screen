@@ -1,9 +1,21 @@
 'use strict';
 
 const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, shell } = require('electron');
-const { fork } = require('node:child_process');
+const { execFileSync, fork } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+
+function doubleClickInterval() {
+  if (process.platform === 'win32') {
+    try {
+      const reg = path.join(process.env.SystemRoot, 'System32', 'reg.exe');
+      const result = execFileSync(reg, ['query', 'HKCU\\Control Panel\\Mouse', '/v', 'DoubleClickSpeed'], { encoding: 'utf8', windowsHide: true, timeout: 1000 });
+      const ms = Number(result.match(/DoubleClickSpeed\s+REG_SZ\s+(\d+)/i)?.[1]);
+      if (ms > 0 && ms <= 5000) return ms;
+    } catch { /* Use the default if the preference is unavailable. */ }
+  }
+  return 500;
+}
 
 const args = process.argv.slice(1);
 const port = Number(args.includes('--port') ? args[args.indexOf('--port') + 1] : process.env.PORT || 8080);
@@ -37,7 +49,11 @@ function launch() {
     }
     win = new BrowserWindow({
       title: 'MobileTV', icon, width: 1280, height: 820, show: false,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false },
+      webPreferences: {
+        sandbox: true, contextIsolation: true, nodeIntegration: false,
+        preload: path.join(root, 'desktop', 'preload.js'),
+        additionalArguments: ['--mobiletv-double-click-ms=' + doubleClickInterval()],
+      },
     });
     const window = win;
     window.removeMenu();

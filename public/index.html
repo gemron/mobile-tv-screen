@@ -3,43 +3,63 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#eef5f2" />
-  <title>MobileTV · 你的无线大屏</title>
+  <meta name="theme-color" content="#f5f3ef" />
+  <title>投屏 · MobileTV</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="stylesheet" href="/css/style.css" />
   <link rel="stylesheet" href="/css/library.css" />
   <link rel="stylesheet" href="/css/subtitles.css" />
+  <link rel="stylesheet" href="/css/workspace.css" />
 </head>
-<body>
+<body class="tv-workspace">
   <header class="topbar">
-    <a class="brand" href="/" aria-label="MobileTV 首页"><img class="brand-icon brand-logo" src="/favicon.svg" alt="" width="42" height="42" /><span><span class="brand-title" id="headerDeviceName">MobileTV</span><span class="brand-sub">你的无线大屏</span></span></a>
-    <nav class="app-nav" aria-label="主要功能"><button type="button" class="active" data-library-nav="cast" aria-pressed="true">投屏</button><button type="button" data-library-nav="vod" aria-pressed="false">影视</button><button type="button" data-library-nav="live" aria-pressed="false">直播</button></nav>
+    <a class="brand" id="brandHome" href="/" aria-label="MobileTV 投屏首页"><img class="brand-icon brand-logo" src="/favicon.svg" alt="" width="42" height="42" /><span><span class="brand-title">MobileTV</span><span class="brand-sub" id="headerDeviceName">本机接收器</span></span></a>
+    <nav class="app-nav" aria-label="主要功能">
+      <button type="button" class="active" data-library-nav="cast" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="/icons.svg#cast" /></svg>投屏</button>
+      <button type="button" data-library-nav="vod" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="/icons.svg#play" /></svg>影视片库</button>
+      <button type="button" data-library-nav="live" aria-pressed="false"><svg class="icon" aria-hidden="true"><use href="/icons.svg#screen" /></svg>直播</button>
+    </nav>
     <div class="header-actions">
       <span class="connection-status"><span class="dot" id="dotWs"></span><span id="lblWs">正在连接</span></span><span class="header-divider"></span>
       <button class="icon-btn" id="btnTheme" title="切换浅色 / 深色" aria-label="切换浅色或深色主题"><svg class="icon theme-moon"><use href="/icons.svg#moon" /></svg><svg class="icon theme-sun"><use href="/icons.svg#sun" /></svg></button>
       <button class="icon-btn" id="btnKeyboardHelp" title="键盘快捷键 (?)" aria-label="查看键盘快捷键"><svg class="icon"><use href="/icons.svg#keyboard" /></svg></button>
       <button class="icon-btn" id="btnSettings" title="设备设置" aria-label="打开设备设置"><svg class="icon"><use href="/icons.svg#settings" /></svg></button>
-      <button class="btn btn-small" id="btnStandbyFullscreen" title="全屏 (F)"><svg class="icon"><use href="/icons.svg#fullscreen" /></svg><span>全屏</span></button>
+      <button class="btn btn-small" id="btnStandbyFullscreen" title="全屏 (F)" aria-label="全屏"><svg class="icon" aria-hidden="true"><use href="/icons.svg#fullscreen" /></svg><span>全屏</span></button>
     </div>
   </header>
 
   <main class="standby-view" id="standbyView">
-    <section class="welcome"><div><p class="eyebrow">CONNECTED MOMENTS</p><h1>小屏内容，大屏享受<span class="accent-period">。</span></h1><p class="welcome-description">连接同一个 Wi-Fi，从手机发起投屏，或直接打开一个视频链接。</p></div><div class="welcome-symbol" aria-hidden="true"><svg class="icon"><use href="/icons.svg#cast" /></svg></div></section>
-    <div class="dashboard-grid">
+    <div class="cast-dashboard">
+      <section class="cast-hero" aria-labelledby="castTitle">
+        <div class="cast-hero-content">
+          <span class="cast-hero-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#cast" /></svg></span>
+          <h1 id="castTitle" tabindex="-1">手机投屏</h1>
+          <p>让手机和电脑连接同一个 Wi-Fi。<br />用手机相机扫码，或从视频 App 发起投屏。</p>
+          <button type="button" class="btn hero-library" id="openFilmLibrary"><svg class="icon" aria-hidden="true"><use href="/icons.svg#play" /></svg>打开影视片库<svg class="icon" aria-hidden="true"><use href="/icons.svg#arrow" /></svg></button>
+        </div>
+      </section>
       <section class="card connect-card" aria-labelledby="connectTitle">
         <div class="section-heading"><h2 id="connectTitle">扫码连接</h2><span class="chip" id="clientCountChip">等待手机连接</span></div>
-        <p class="section-description">手机浏览器扫一扫，即可投屏和遥控。</p>
         <div class="qr-wrap"><div class="qr-frame"><img id="qrImg" alt="手机连接此大屏的二维码" width="200" height="200" /></div></div>
-        <div class="receiver-identity"><span class="mini-label">当前大屏</span><strong id="receiverName">MobileTV</strong><span class="network-line"><svg class="icon"><use href="/icons.svg#wifi" /></svg><span id="guideIpAndroid">正在获取地址</span><span class="network-tag">同一 Wi-Fi</span></span></div>
+        <div class="receiver-identity">
+          <svg class="icon" aria-hidden="true"><use href="/icons.svg#screen" /></svg>
+          <div><span class="mini-label">接收设备</span><strong id="receiverName">MobileTV</strong></div>
+          <span class="network-line" id="guideIpAndroid"></span>
+        </div>
         <div class="connection-link"><span class="qr-url" id="mobileUrlText">正在生成连接地址…</span><button class="icon-btn" id="btnCopyUrl" title="复制手机连接地址" aria-label="复制手机连接地址"><svg class="icon"><use href="/icons.svg#copy" /></svg></button></div>
+      </section>
+      <section class="card link-cast-card" aria-labelledby="linkCastTitle">
+        <div class="section-heading"><span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#link" /></svg></span><h2 id="linkCastTitle">链接投屏</h2></div>
+        <div class="cast-bar"><input class="input-box" id="quickUrlInput" type="url" aria-label="媒体链接" aria-describedby="quickCastHint" placeholder="粘贴视频、直播或图片链接" autocomplete="off" /><button class="btn btn-primary" id="btnQuickCast">开始投屏<svg class="icon" aria-hidden="true"><use href="/icons.svg#arrow" /></svg></button></div>
+        <p class="field-hint" id="quickCastHint" aria-live="polite">支持 MP4、M3U8、FLV 等媒体直链</p>
+      </section>
+      <section class="card app-cast-card" aria-labelledby="appCastTitle">
+        <div class="section-heading"><span class="feature-icon"><svg class="icon" aria-hidden="true"><use href="/icons.svg#phone" /></svg></span><h2 id="appCastTitle">从视频 App 投屏</h2></div>
+        <p>点击视频里的 <span class="tv-mark">TV</span> 投屏图标，选择这台设备。</p>
         <div class="protocol-status" aria-label="投屏服务状态"><span><i class="dot" id="dotDlna"></i><span id="lblDlna">DLNA</span></span><span><i class="dot" id="dotAirplay"></i><span id="lblAirplay">AirPlay</span></span><span><i class="dot" id="dotTvbox"></i><span id="lblTvbox">影视</span></span></div>
       </section>
-      <div class="content-column">
-        <section class="card app-cast-card" aria-labelledby="appCastTitle"><div class="feature-icon"><svg class="icon"><use href="/icons.svg#cast" /></svg></div><div class="app-cast-content"><h2 id="appCastTitle">从视频 App 投屏</h2><p>打开视频，点击 <span class="tv-mark">TV</span> 投屏图标，选择这台大屏。</p><span class="supported-apps">腾讯视频 · 哔哩哔哩 · OK影视 · 支持 DLNA 的 App</span></div></section>
-        <section class="card link-cast-card" aria-labelledby="linkCastTitle"><div class="section-heading"><h2 id="linkCastTitle">链接投屏</h2><span class="mini-label">视频 / 直播 / 图片</span></div><div class="cast-bar"><span class="input-icon" aria-hidden="true"><svg class="icon"><use href="/icons.svg#link" /></svg></span><input class="input-box" id="quickUrlInput" type="url" aria-label="视频或图片链接" placeholder="粘贴视频或图片链接…" autocomplete="off" /><button class="btn btn-primary" id="btnQuickCast">开始投屏<svg class="icon"><use href="/icons.svg#arrow" /></svg></button></div><p class="field-hint">支持 MP4、M3U8、FLV 等媒体直链<span class="shortcut-hint"><kbd>Enter</kbd> 开始</span></p></section>
-        <section class="card history-card" aria-labelledby="historyTitle"><div class="section-heading"><h2 id="historyTitle">最近播放</h2><span class="mini-label" id="historyCountChip">0 条记录</span></div><div class="history-list" id="historyList"><div class="empty-state"><svg class="icon"><use href="/icons.svg#clock" /></svg><p>还没有播放记录</p><span>你的下一次大屏体验，从这里开始。</span></div></div></section>
-      </div>
     </div>
+    <section class="card history-card" aria-labelledby="historyTitle"><div class="section-heading"><h2 id="historyTitle">最近投屏</h2><span class="mini-label" id="historyCountChip">0 条记录</span></div><div class="history-list" id="historyList"><div class="empty-state"><svg class="icon" aria-hidden="true"><use href="/icons.svg#clock" /></svg><p>还没有投屏记录</p></div></div></section>
     <details class="connection-help"><summary><svg class="icon"><use href="/icons.svg#phone" /></svg><span>连接帮助</span><span class="help-summary">Android、iPhone 与屏幕镜像</span><svg class="icon chevron"><use href="/icons.svg#chevron" /></svg></summary><div class="guides-grid">
       <article><h3>Android / OK影视</h3><p>在视频播放页点击 TV，选择 <strong id="guideNameAndroid">这台大屏</strong>。也可扫码上传手机文件。</p><p class="hint">Android 17 请允许发送 App 访问“附近设备 / 本地网络”；旧版本没有权限入口时，先更新 App。</p></article>
       <article><h3>iPhone / iPad</h3><p>支持 DLNA 的 App 可选择 <strong id="guideNameApple">这台大屏</strong>；基础 AirPlay 视频请选择带“AirPlay”后缀的设备。</p><p class="hint">AirPlay 尚未经过苹果真机验证，暂不支持控制中心屏幕镜像、音频输出和受保护的视频。</p></article>
@@ -50,7 +70,7 @@
 
   <main class="library-view" id="libraryView" hidden>
     <section class="library-heading">
-      <h1 id="libraryTitle">影视片库</h1>
+      <h1 id="libraryTitle" tabindex="-1">影视片库</h1>
       <div class="library-source-switch"><label for="librarySavedSource">订阅</label><select class="library-select" id="librarySavedSource" aria-label="已保存的订阅地址"><option value="">添加订阅地址</option></select><button type="button" class="btn" id="libraryManageSources">片源管理</button><button type="button" class="btn" id="libraryAccounts">账号</button></div>
     </section>
     <div class="library-browse-bar"><nav class="library-shelves" aria-label="我的片库"><button type="button" class="active" data-library-shelf="browse" aria-pressed="true">浏览</button><button type="button" data-library-shelf="history" aria-pressed="false">播放历史 <span id="libraryHistoryCount">0</span></button><button type="button" data-library-shelf="favorites" aria-pressed="false">收藏 <span id="libraryFavoriteCount">0</span></button></nav><button type="button" class="text-button" id="libraryRetry">刷新</button></div>
@@ -59,7 +79,7 @@
     <section id="libraryVod" aria-label="点播片库">
       <div class="library-toolbar vod-toolbar">
         <label class="library-source-choice"><span>浏览片源</span><select class="library-select" id="librarySite" aria-label="点播站点"></select></label>
-        <form class="library-search" id="librarySearchForm"><input class="input-box" id="librarySearch" type="search" maxlength="200" placeholder="输入片名、演员，按 Enter 搜索" aria-label="搜索片名或演员" /><label class="library-search-scope"><input id="librarySearchAll" type="checkbox" />搜索全部片源</label><button type="submit" class="btn btn-primary">搜索</button><button type="button" class="btn" id="libraryCancelSearch" hidden>停止</button></form>
+        <form class="library-search" id="librarySearchForm"><div class="library-search-field"><svg class="icon" aria-hidden="true"><use href="/icons.svg#search" /></svg><input class="input-box" id="librarySearch" type="search" maxlength="200" placeholder="搜索片名或演员" aria-label="搜索片名或演员" aria-keyshortcuts="/" /></div><label class="library-search-scope"><input id="librarySearchAll" type="checkbox" />搜索全部片源</label><button type="submit" class="btn btn-primary">搜索</button><button type="button" class="btn" id="libraryCancelSearch" hidden>停止</button></form>
       </div>
       <div class="search-history" id="librarySearchHistory" aria-label="最近搜索" hidden><span class="search-history-label">最近搜索</span><div class="search-history-list" id="librarySearchHistoryList"></div><button type="button" class="text-button" id="libraryClearSearchHistory">清空</button></div>
       <div class="library-search-context"><p id="librarySearchHint"></p><button class="text-button" type="button" id="libraryResetSearch" hidden>返回推荐</button></div>
@@ -71,7 +91,7 @@
       <div class="library-pager" id="libraryPager" hidden><button class="btn" id="libraryPrevious">上一页</button><span id="libraryPage"></span><button class="btn" id="libraryMore">下一页</button></div>
     </section>
     <section id="libraryLive" aria-label="直播频道" hidden>
-      <div class="live-welcome"><div><span class="live-badge">LIVE</span><h2>你的电视，随时开播。</h2><p id="libraryLiveHint">选择频道开始观看 · N / P 换台 · 数字选台 · C 频道表</p></div><button class="btn" id="libraryLiveResume" hidden>继续观看</button></div>
+      <div class="live-welcome"><svg class="icon" aria-hidden="true"><use href="/icons.svg#screen" /></svg><p id="libraryLiveHint">N / P 换台 · 数字选台 · C 频道表</p><button class="btn" id="libraryLiveResume" hidden>继续观看</button></div>
       <div class="library-toolbar live-toolbar"><select class="library-select" id="libraryLiveSource" aria-label="直播源"></select><select class="library-select" id="libraryLiveGroup" aria-label="频道分组"><option value="">全部分组</option></select><button class="btn" id="libraryLiveFavorites" aria-pressed="false">☆ 收藏频道</button><button class="btn" id="libraryLiveRefresh">刷新频道</button><div class="library-search"><input class="input-box" id="libraryLiveSearch" type="search" placeholder="频道名称 / 编号" aria-label="搜索直播频道" /></div></div>
       <div class="live-channel-grid" id="libraryChannelList"><p class="library-empty">导入配置并选择直播源</p></div>
       <div class="library-pager"><button class="btn" id="libraryMoreChannels" hidden>更多频道</button></div>
@@ -95,7 +115,7 @@
     <div class="library-matches-scroll" tabindex="0" role="region" aria-label="滚动浏览片源结果"><div class="vod-grid" id="libraryMatchesResults" aria-label="推荐影片的片源结果"></div></div>
   </dialog>
   <dialog class="app-dialog library-detail" id="libraryDetail" aria-labelledby="libraryDetailTitle">
-    <div class="dialog-heading"><div><span class="eyebrow">READY TO WATCH</span><h2 id="libraryDetailTitle">影片详情</h2></div><div class="detail-heading-actions"><button type="button" class="btn" id="libraryDetailFavorite" aria-pressed="false" hidden>☆ 收藏</button><button class="icon-btn" id="libraryCloseDetail" aria-label="关闭影片详情"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div></div>
+    <div class="dialog-heading"><h2 id="libraryDetailTitle">影片详情</h2><div class="detail-heading-actions"><button type="button" class="btn" id="libraryDetailFavorite" aria-pressed="false" hidden>☆ 收藏</button><button class="icon-btn" id="libraryCloseDetail" aria-label="关闭影片详情"><svg class="icon"><use href="/icons.svg#close" /></svg></button></div></div>
     <div class="library-detail-intro"><img class="library-detail-picture" id="libraryDetailPicture" alt="影片海报" hidden /><div class="library-detail-info"><p id="libraryDetailInfo"></p><p class="library-detail-cast" id="libraryDetailCast"></p><p class="library-detail-description" id="libraryDetailDescription"></p></div></div>
     <div class="match-detail-teams" id="libraryMatchTeams" hidden></div>
     <div class="library-detail-loading" id="libraryDetailLoading" role="status" aria-live="polite" hidden><span class="detail-spinner" aria-hidden="true"></span><strong>正在读取线路和选集…</strong><span>请稍候，也可以随时关闭</span></div>
@@ -147,7 +167,7 @@
         <button class="btn player-stop" id="btnStopCast">结束投屏<svg class="icon"><use href="/icons.svg#close" /></svg></button>
       </div>
     </div>
-    <div class="player-bottom-hud"><div class="seek-row" id="seekRow"><span class="time-label" id="lblCurrentTime">00:00</span><div class="seek-track" id="seekTrack" title="浅色表示已缓冲，绿色表示已播放"><div class="seek-buffered" id="seekBuffered" aria-hidden="true"></div><div class="seek-played" id="seekPlayed" aria-hidden="true"></div><input class="seek-slider" id="seekSlider" aria-label="播放进度" type="range" min="0" max="100" step="0.5" value="0" /></div><span class="time-label" id="lblDuration">00:00</span></div>
+    <div class="player-bottom-hud"><div class="seek-row" id="seekRow"><span class="time-label" id="lblCurrentTime">00:00</span><div class="seek-track" id="seekTrack"><div class="seek-buffered" id="seekBuffered" aria-hidden="true"></div><div class="seek-played" id="seekPlayed" aria-hidden="true"></div><span class="seek-preview" id="seekPreview" aria-hidden="true" hidden></span><input class="seek-slider" id="seekSlider" aria-label="播放进度" type="range" min="0" max="100" step="0.5" value="0" /></div><span class="time-label" id="lblDuration">00:00</span></div>
       <div class="controls-row"><div class="controls-group"><button class="btn" id="btnRewind15" title="后退 15 秒"><svg class="icon"><use href="/icons.svg#rewind" /></svg>15</button><button class="btn btn-primary player-play" id="btnPlayPause" title="播放 / 暂停 (空格)">暂停</button><button class="btn" id="btnForward15" title="前进 15 秒">15<svg class="icon"><use href="/icons.svg#forward" /></svg></button><span class="control-divider"></span><button class="btn" id="btnMute" title="静音 (M)">静音</button><input id="volumeSlider" aria-label="音量" type="range" min="0" max="100" value="80" /></div>
       <div class="controls-group playback-actions"><select class="hud-select" id="selectRate" aria-label="播放速度"><option value="0.5">0.5×</option><option value="0.75">0.75×</option><option value="1" selected>1.0×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="1.75">1.75×</option><option value="2">2.0×</option></select>
         <details class="player-rate" id="playerRate" hidden><summary class="btn" aria-label="播放速度，当前 1 倍" aria-haspopup="menu" aria-controls="playerRateMenu"><span id="playerRateLabel">倍速</span><svg class="icon"><use href="/icons.svg#chevron" /></svg></summary><div class="player-rate-panel"><p>播放速度</p><div id="playerRateMenu" role="menu" aria-label="选择播放速度"></div></div></details>
